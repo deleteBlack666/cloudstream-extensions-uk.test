@@ -139,8 +139,17 @@ class SimpsonsUATvProvider : MainAPI() {
         return Regex("""(\d+)-seriya""").find(url)?.groupValues?.get(1)?.toIntOrNull() ?: fallback
     }
 
-  //  private fun sectionTitle(url: String, fallbackDoc: Document? = null): String {
-        
+    private fun sectionTitle(url: String, fallbackDoc: Document? = null): String {
+                val slug = urlSlug(url)
+        sectionNameMap[slug]?.let { return it }
+        fallbackDoc?.selectFirst(".cat-nazva h1, h1")?.text()
+            ?.replace("дивитися онлайн українською мовою", "")
+            ?.replace("дивитися онлайн українською", "")
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+            ?.let { return it }
+        return capitalizeWord(slug.replace("-", " "))
+}
 
     private fun extractImageUrl(el: Element?): String? {
         val img = el?.selectFirst("img") ?: return null
