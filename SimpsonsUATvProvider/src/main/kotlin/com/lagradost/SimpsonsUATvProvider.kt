@@ -139,17 +139,8 @@ class SimpsonsUATvProvider : MainAPI() {
         return Regex("""(\d+)-seriya""").find(url)?.groupValues?.get(1)?.toIntOrNull() ?: fallback
     }
 
-    private fun sectionTitle(url: String, fallbackDoc: Document? = null): String {
-        val slug = urlSlug(url)
-        sectionNameMap[slug]?.let { return it }
-        fallbackDoc?.selectFirst(".cat-nazva h1, h1")?.text()
-           // ?.replace("дивитися онлайн українською мовою", "")
-          //  ?.replace("дивитися онлайн українською", "")
-            ?.trim()
-            ?.takeIf { it.isNotBlank() }
-            ?.let { return it }
-        return capitalizeWord(slug.replace("-", " "))
-    }
+  //  private fun sectionTitle(url: String, fallbackDoc: Document? = null): String {
+        
 
     private fun extractImageUrl(el: Element?): String? {
         val img = el?.selectFirst("img") ?: return null
@@ -185,7 +176,7 @@ class SimpsonsUATvProvider : MainAPI() {
     return try {
         val encodedUrl = java.net.URLEncoder.encode(url, StandardCharsets.UTF_8.name())
         // fpy=0.12 — зміщує кадр ближче до верху (налаштовуйте під себе від 0.0 до 0.2)
-        "https://images.weserv.nl/?url=$encodedUrl&w=320&h=180&fit=crop&a=focal&fpx=0.5&fpy=0.20&output=webp&q=75"
+        "https://images.weserv.nl/?url=$encodedUrl&w=320&h=180&fit=crop&a=focal&fpx=0.5&fpy=0.17&output=webp&q=75"
     } catch (e: Exception) {
         url
     }
