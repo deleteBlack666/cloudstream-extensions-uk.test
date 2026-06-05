@@ -144,7 +144,7 @@ class SimpsonsUATvProvider : MainAPI() {
         sectionNameMap[slug]?.let { return it }
         fallbackDoc?.selectFirst(".cat-nazva h1, h1")?.text()
            // ?.replace("дивитися онлайн українською мовою", "")
-            ?.replace("дивитися онлайн українською", "")
+          //  ?.replace("дивитися онлайн українською", "")
             ?.trim()
             ?.takeIf { it.isNotBlank() }
             ?.let { return it }
