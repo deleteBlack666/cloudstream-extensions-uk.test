@@ -282,6 +282,7 @@ class SimpsonsUATvProvider : MainAPI() {
                     ?: "Серія $epNum"
                 .replace(Regex("дивитися онлайн.*", RegexOption.IGNORE_CASE), "")
                 .replace(Regex("українською.*", RegexOption.IGNORE_CASE), "")
+                .trim()
                 val epDesc = a.selectFirst(".descr:not(.nazva)")?.text()?.trim()
                 val epPoster = extractImageUrl(card)
                 into.add(newEpisode(epUrl) {
