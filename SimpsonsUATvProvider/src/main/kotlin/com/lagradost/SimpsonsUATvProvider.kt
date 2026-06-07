@@ -144,8 +144,6 @@ class SimpsonsUATvProvider : MainAPI() {
     sectionNameMap[slug]?.let { return it }
     fallbackDoc?.selectFirst(".cat-nazva h1, h1")?.text()
         ?.replace(Regex("дивитися онлайн.*", RegexOption.IGNORE_CASE), "")
-        ?.replace(Regex("українською.*", RegexOption.IGNORE_CASE), "")  // ← додати
-        ?.replace(Regex("онлайн.*", RegexOption.IGNORE_CASE), "")       // ← додати
         ?.trim()
         ?.takeIf { it.isNotBlank() }
         ?.let { return it }
@@ -200,7 +198,7 @@ class SimpsonsUATvProvider : MainAPI() {
             if (page == 1) {
                 try {
                     val doc = app.get(mainUrl, headers = headers()).document
-                    val updates = doc.select("div.ep_slider div.movie_item").take(25).mapNotNull { el ->
+                    val updates = doc.select("div.ep_slider div.movie_item").take(15).mapNotNull { el ->
                         val href = el.selectFirst("a")?.attr("href") ?: return@mapNotNull null
                         val posterUrl = extractImageUrl(el)
                         val title = getTitleFromComment(el) ?: "Нова серія"
@@ -221,7 +219,7 @@ class SimpsonsUATvProvider : MainAPI() {
         try {
             val catalogUrl = if (page == 1) request.data else "${request.data}page/$page/"
             val doc = app.get(catalogUrl, headers = headers()).document
-            val items = doc.select("div.movie_item").take(40).mapNotNull { el ->
+            val items = doc.select("div.movie_item").take(20).mapNotNull { el ->
                 val href = el.selectFirst("a")?.attr("href") ?: return@mapNotNull null
                 val posterUrl = extractImageUrl(el)
                 val slug = urlSlug(href)
