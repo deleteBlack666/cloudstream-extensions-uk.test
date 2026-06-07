@@ -140,16 +140,17 @@ class SimpsonsUATvProvider : MainAPI() {
     }
 
     private fun sectionTitle(url: String, fallbackDoc: Document? = null): String {
-                val slug = urlSlug(url)
-        sectionNameMap[slug]?.let { return it }
-        fallbackDoc?.selectFirst(".cat-nazva h1, h1")?.text()
-            ?.replace("дивитися онлайн українською мовою", "")
-            ?.replace("дивитися онлайн українською", "")
-            ?.trim()
-            ?.takeIf { it.isNotBlank() }
-            ?.let { return it }
-        return capitalizeWord(slug.replace("-", " "))
-}
+    val slug = urlSlug(url)
+    sectionNameMap[slug]?.let { return it }
+    fallbackDoc?.selectFirst(".cat-nazva h1, h1")?.text()
+        ?.replace(Regex("дивитися онлайн.*", RegexOption.IGNORE_CASE), "")
+        ?.replace(Regex("українською.*", RegexOption.IGNORE_CASE), "")  // ← додати
+        ?.replace(Regex("онлайн.*", RegexOption.IGNORE_CASE), "")       // ← додати
+        ?.trim()
+        ?.takeIf { it.isNotBlank() }
+        ?.let { return it }
+    return capitalizeWord(slug.replace("-", " "))
+    }
 
     private fun extractImageUrl(el: Element?): String? {
         val img = el?.selectFirst("img") ?: return null
