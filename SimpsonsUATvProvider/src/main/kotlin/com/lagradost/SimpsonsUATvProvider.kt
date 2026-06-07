@@ -331,9 +331,11 @@ class SimpsonsUATvProvider : MainAPI() {
 
         val title = document.selectFirst(".poster h2, .cat-nazva h1, h1")?.text()
             ?.replace(Regex("дивитися онлайн.*", RegexOption.IGNORE_CASE), "")
+            ?.replace(Regex("українською.*", RegexOption.IGNORE_CASE), "")
             ?.trim()
             ?: document.title()
                 .replace(Regex("дивитися онлайн.*", RegexOption.IGNORE_CASE), "")
+                .replace(Regex("українською.*", RegexOption.IGNORE_CASE), "")
                 .trim()
 
         val mainImgEl = document.selectFirst(".movie_item, div.story, .poster")
