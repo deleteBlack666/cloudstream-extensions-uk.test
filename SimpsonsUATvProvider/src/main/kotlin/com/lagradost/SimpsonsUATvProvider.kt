@@ -192,28 +192,58 @@ class SimpsonsUATvProvider : MainAPI() {
 
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
-        val homePageLists = mutableListOf<HomePageList>()
+    val homePageLists = mutableListOf<HomePageList>()
 
-        if (request.data == "$mainUrl/") {
-            if (page == 1) {
-                try {
-                    val doc = app.get(mainUrl, headers = headers()).document
-                    val updates = doc.select("div.ep_slider div.movie_item").take(15).mapNotNull { el ->
-                        val href = el.selectFirst("a")?.attr("href") ?: return@mapNotNull null
-                        val posterUrl = extractImageUrl(el)
-                        val title = getTitleFromComment(el) ?: "Нова серія"
-                        newAnimeSearchResponse(title, href, TvType.Cartoon) {
-                            this.posterUrl = convertToPortraitProxy(posterUrl)
-                            this.posterHeaders = mapOf("Referer" to mainUrl)
-                        }
+    if (request.data == "$mainUrl/") {
+        if (page == 1) {
+            try {
+                val doc = app.get(mainUrl, headers = headers()).document
+                val updates = doc.select("div.ep_slider div.movie_item").take(15).mapNotNull { el ->
+                    val href = el.selectFirst("a")?.attr("href") ?: return@mapNotNull null
+                    val posterUrl = extractImageUrl(el)
+                    val title = getTitleFromComment(el) ?: "Нова серія"
+                    newAnimeSearchResponse(title, href, TvType.Cartoon) {
+                        this.posterUrl = convertToPortraitProxy(posterUrl)
+                        this.posterHeaders = mapOf("Referer" to mainUrl)
                     }
-                    if (updates.isNotEmpty())
-                        homePageLists.add(HomePageList("Останні оновлення серій", updates))
-                } catch (e: Exception) { }
-            }
-            return if (homePageLists.isNotEmpty())
-                newHomePageResponse(homePageLists, hasNext = false) else null
+                }
+                if (updates.isNotEmpty())
+                    homePageLists.add(HomePageList("Останні оновлення серій", updates))
+            } catch (e: Exception) { }
         }
+        return if (homePageLists.isNotEmpty())
+            newHomePageResponse(homePageLists, hasNext = false) else null
+    }
+
+    // Каталог завантажується тільки коли юзер гортає до нього
+    if (page == 1) return newHomePageResponse(
+        listOf(HomePageList("Усі мультсеріали", emptyList())),
+        hasNext = true
+    )
+
+    var hasNextPage = false
+    try {
+        val catalogUrl = "${request.data}page/${page - 1}/"
+        val doc = app.get(catalogUrl, headers = headers()).document
+        val items = doc.select("div.movie_item").take(20).mapNotNull { el ->
+            val href = el.selectFirst("a")?.attr("href") ?: return@mapNotNull null
+            val posterUrl = extractImageUrl(el)
+            val slug = urlSlug(href)
+            val title = titleMap[slug] ?: capitalizeWord(slug.replace("-", " "))
+            newAnimeSearchResponse(title, href, TvType.Cartoon) {
+                this.posterUrl = convertToPortraitProxy(posterUrl)
+                this.posterHeaders = mapOf("Referer" to mainUrl)
+            }
+        }
+        if (items.isNotEmpty()) {
+            homePageLists.add(HomePageList("Усі мультсеріали", items))
+            hasNextPage = true
+        }
+    } catch (e: Exception) { hasNextPage = false }
+
+    return if (homePageLists.isNotEmpty())
+        newHomePageResponse(homePageLists, hasNext = hasNextPage) else null
+    }
 
         var hasNextPage = false
         try {
