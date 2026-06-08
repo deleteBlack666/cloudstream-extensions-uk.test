@@ -2,7 +2,6 @@ package com.lagradost
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
-import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
@@ -191,6 +190,7 @@ class AnitubeinuaProvider : MainAPI() {
         }
     }
 
+    @Suppress("DEPRECATION")
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -243,7 +243,7 @@ class AnitubeinuaProvider : MainAPI() {
                                     .dropLast(1).forEach { link ->
                                         val finalName = "${link.name} (${it.urls.name})"
                                         if (addedLinks.add("${link.url}_$finalName")) {
-                                            callback(newExtractorLink(
+                                            callback(ExtractorLink(
                                                 source = link.source,
                                                 name = finalName,
                                                 url = link.url,
@@ -257,11 +257,13 @@ class AnitubeinuaProvider : MainAPI() {
                                     }
                         }
                         it.urls.url.contains("https://www.udrop.com") -> {
-                            val link = newExtractorLink(
-                                this.urls.url,
-                                "${it.urls.playerName} (${it.urls.name})",
-                                this.urls.url,
-                                ExtractorLinkType.M3U8
+                            val link = ExtractorLink(
+                                source = this.urls.url,
+                                name = "${it.urls.playerName} (${it.urls.name})",
+                                url = this.urls.url,
+                                referer = "",
+                                quality = 0,
+                                type = ExtractorLinkType.M3U8
                             )
                             if (addedLinks.add(link.url)) {
                                 callback.invoke(link)
@@ -270,11 +272,13 @@ class AnitubeinuaProvider : MainAPI() {
                         it.urls.url.contains("https://csst.online/embed/") ||
                                 it.urls.url.contains("https://monstro.site/embed/") -> {
                             csstExtractor().ParseUrl(it.urls.url).split(",").forEach { csstUrl ->
-                                val link = newExtractorLink(
-                                    this.urls.url,
-                                    "${it.urls.playerName} (${it.urls.name}) ${csstUrl.substringBefore("]").drop(1)}",
-                                    csstUrl.substringAfter("]"),
-                                    ExtractorLinkType.M3U8
+                                val link = ExtractorLink(
+                                    source = this.urls.url,
+                                    name = "${it.urls.playerName} (${it.urls.name}) ${csstUrl.substringBefore("]").drop(1)}",
+                                    url = csstUrl.substringAfter("]"),
+                                    referer = "",
+                                    quality = 0,
+                                    type = ExtractorLinkType.M3U8
                                 )
                                 if (addedLinks.add(link.url)) {
                                     callback.invoke(link)
@@ -283,10 +287,15 @@ class AnitubeinuaProvider : MainAPI() {
                         }
                         it.urls.url.contains("https://www.mp4upload.com/") -> {
                             getExtractorApiFromName("Mp4Upload").getUrl(it.urls.url)?.forEach { extlink ->
-                                val link = newExtractorLink(
-                                        extlink.source,
-                                        "${it.urls.playerName} (${it.urls.name})",
-                                        extlink.url,
+                                val link = ExtractorLink(
+                                        source = extlink.source,
+                                        name = "${it.urls.playerName} (${it.urls.name})",
+                                        url = extlink.url,
+                                        referer = extlink.referer,
+                                        quality = extlink.quality,
+                                        type = extlink.type,
+                                        headers = extlink.headers,
+                                        extractorData = extlink.extractorData
                                 )
                                 if (addedLinks.add(link.url)) {
                                     callback.invoke(link)
@@ -331,7 +340,7 @@ class AnitubeinuaProvider : MainAPI() {
                                             .dropLast(1).forEach { link ->
                                                 val finalName = "${link.name} (${dub.playerName})"
                                                 if (addedLinks.add("${link.url}_$finalName")) {
-                                                    callback(newExtractorLink(
+                                                    callback(ExtractorLink(
                                                         source = link.source,
                                                         name = finalName,
                                                         url = link.url,
@@ -345,10 +354,13 @@ class AnitubeinuaProvider : MainAPI() {
                                             }
                                 }
                                 contains("https://www.udrop.com") -> {
-                                    val link = newExtractorLink(
-                                            dub.playerName,
+                                    val link = ExtractorLink(
+                                            source = dub.playerName,
                                             name = dub.playerName,
-                                            this,
+                                            url = this,
+                                            referer = "",
+                                            quality = 0,
+                                            type = ExtractorLinkType.VIDEO
                                         )
                                     if (addedLinks.add(link.url)) {
                                         callback.invoke(link)
@@ -357,11 +369,13 @@ class AnitubeinuaProvider : MainAPI() {
                                 contains("https://monstro.site/embed/") ||
                                         contains("https://csst.online/embed/") -> {
                                     csstExtractor().ParseUrl(this).split(",").forEach {
-                                        val link = newExtractorLink(
-                                            dub.playerName,
-                                            name =
-                                            "${dub.playerName.replace("\"", "")} ${it.substringBefore("]").drop(1)}",
-                                            it.substringAfter("]"),
+                                        val link = ExtractorLink(
+                                            source = dub.playerName,
+                                            name = "${dub.playerName.replace("\"", "")} ${it.substringBefore("]").drop(1)}",
+                                            url = it.substringAfter("]"),
+                                            referer = "",
+                                            quality = 0,
+                                            type = ExtractorLinkType.VIDEO
                                         )
                                         if (addedLinks.add(link.url)) {
                                             callback.invoke(link)
@@ -370,10 +384,15 @@ class AnitubeinuaProvider : MainAPI() {
                                 }
                                 contains("https://www.mp4upload.com/") -> {
                                     getExtractorApiFromName("Mp4Upload").getUrl(this)?.forEach { extlink ->
-                                        val link = newExtractorLink(
-                                            extlink.source,
-                                            dub.playerName,
-                                            extlink.url,
+                                        val link = ExtractorLink(
+                                            source = extlink.source,
+                                            name = dub.playerName,
+                                            url = extlink.url,
+                                            referer = extlink.referer,
+                                            quality = extlink.quality,
+                                            type = extlink.type,
+                                            headers = extlink.headers,
+                                            extractorData = extlink.extractorData
                                         )
                                         if (addedLinks.add(link.url)) {
                                             callback.invoke(link)
