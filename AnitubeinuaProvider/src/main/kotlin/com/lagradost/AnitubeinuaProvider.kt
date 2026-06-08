@@ -20,8 +20,7 @@ import org.jsoup.nodes.Element
 
 class AnitubeinuaProvider : MainAPI() {
 
-    private val TAG = "Anitubeinua"
-
+    // Basic Info
     override var mainUrl = "https://anitube.in.ua"
     override var name = "Anitubeinua"
     override val hasMainPage = true
@@ -34,13 +33,14 @@ class AnitubeinuaProvider : MainAPI() {
                     TvType.Anime,
             )
 
+    // FIX #1: прибрано "Популярні" — URL /f/sort=rating/order=desc/page/ більше не існує
     override val mainPage =
             mainPageOf(
                     "$mainUrl/anime/page/" to "Нові",
             )
 
     private var dle_login_hash = ""
-    
+
     companion object {
         private const val USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0"
     }
@@ -61,6 +61,7 @@ class AnitubeinuaProvider : MainAPI() {
         val title = this.selectFirst(".story_c h2 a, div.text_content a")?.text()?.trim().toString()
         val href = this.selectFirst(".story_c h2 a, div.text_content a")?.attr("href").toString()
         var posterUrl = this.selectFirst(".story_c_l span.story_post img")?.attr("src")
+        // For recommendations
         if (posterUrl.isNullOrEmpty()) posterUrl = this.selectFirst("a img")?.attr("data-src")
 
         var isSub = this.select(".box .sub").isNotEmpty()
@@ -95,10 +96,8 @@ class AnitubeinuaProvider : MainAPI() {
         return document.select("article.story").map { it.toSearchResponse() }
     }
 
+    // Detailed information — оригінальні селектори збережено
     override suspend fun load(url: String): AnimeLoadResponse {
-        Log.d(TAG, "==== START LOAD ====")
-        Log.d(TAG, "Завантаження сторінки аніме: $url")
-        
         val document = app.get(url,
             headers = mapOf(
                 "User-Agent" to USER_AGENT,
@@ -123,59 +122,46 @@ class AnitubeinuaProvider : MainAPI() {
         val subEpisodes = mutableListOf<Episode>()
         val dubEpisodes = mutableListOf<Episode>()
         val id = url.split("/").last().split("-").first()
-        
-        try {
-            dle_login_hash = document
-                    .body()
-                    .selectFirst("script")!!
-                    .html()
-                    .substringAfterLast("dle_login_hash = '")
-                    .substringBefore("';")
-            Log.d(TAG, "Знайдено dle_login_hash у load(): $dle_login_hash, ID новини: $id")
-        } catch (e: Exception) {
-            Log.e(TAG, "Помилка парсингу dle_login_hash у load()", e)
-        }
+        dle_login_hash =
+                document
+                        .body()
+                        .selectFirst("script")!!
+                        .html()
+                        .substringAfterLast("dle_login_hash = '")
+                        .substringBefore("';")
 
-        val ajax = fromPlaylistAjax(
-                "$mainUrl/engine/ajax/playlists.php?news_id=$id&xfield=playlist&user_hash=$dle_login_hash", referer = url)
+        val ajax =
+                fromPlaylistAjax(
+                        "$mainUrl/engine/ajax/playlists.php?news_id=$id&xfield=playlist&user_hash=$dle_login_hash", referer = url)
 
         if (!ajax.isNullOrEmpty()) {
-            Log.d(TAG, "Знайдено Ajax плейлист у load(), кількість елементів: ${ajax.size}")
             ajax
                     .groupBy { it.name }
                     .forEach { episodes ->
                         episodes.value.forEach lit@{
                             if (it.urls.url.contains("video.ufdub")) return@lit
 
-                            // Використовуємо безпечний роздільник ||| і обов'язково ініціалізуємо this.data
-                            val episodeDataStr = "${it.name}|||$id|||${it.urls.isDub}"
-
                             if (it.urls.isDub) {
                                 dubEpisodes.add(
-                                    newEpisode(episodeDataStr) {
+                                    newEpisode("${it.name}, $id, ${it.urls.isDub}") {
                                         this.name = it.name
                                         this.episode = it.numberEpisode
-                                        this.data = episodeDataStr
                                     }
                                 )
                             } else {
                                 subEpisodes.add(
-                                    newEpisode(episodeDataStr) {
+                                    newEpisode("${it.name}, $id, ${it.urls.isDub}") {
                                         this.name = it.name
                                         this.episode = it.numberEpisode
-                                        this.data = episodeDataStr
                                     }
                                 )
                             }
                         }
                     }
         } else {
-            Log.d(TAG, "Ajax плейлист порожній або відсутній, перевіряємо RalodePlayer у скриптах...")
             document.select("script").map { script ->
                 if (script.data().contains("RalodePlayer.init(")) {
-                    Log.d(TAG, "Знайдено блок RalodePlayer.init")
                     val episodesList = fromVideoContructor(script)
-                    Log.d(TAG, "RalodePlayer повернув серій: ${episodesList.size}")
 
                     episodesList.forEach { episode ->
                         var varEpisodeNumber = episode.episodeNumber
@@ -183,22 +169,17 @@ class AnitubeinuaProvider : MainAPI() {
                         if (varEpisodeNumber == null) {
                             varEpisodeNumber = episodesList.last().episodeNumber?.plus(1)
                         }
-                        
-                        val episodeDataStr = "$varEpisodeNumber|||$url"
                         dubEpisodes.add(
-                            newEpisode(episodeDataStr) {
+                            newEpisode("$varEpisodeNumber, $url") {
                                 this.name = episode.episodeName
                                 this.episode = episode.episodeNumber
-                                this.data = episodeDataStr
+                                this.data = "$varEpisodeNumber, $url"
                             }
                         )
                     }
                 }
             }
         }
-
-        Log.d(TAG, "Завантажено епізодів у load(): Dubbed=${dubEpisodes.size}, Subbed=${subEpisodes.size}")
-        Log.d(TAG, "==== END LOAD ====")
 
         return newAnimeLoadResponse(title, url, tvType) {
             this.posterUrl = poster
@@ -219,214 +200,153 @@ class AnitubeinuaProvider : MainAPI() {
             subtitleCallback: (SubtitleFile) -> Unit,
             callback: (ExtractorLink) -> Unit
     ): Boolean {
-        Log.d(TAG, "==== START LOAD LINKS ====")
-        Log.d(TAG, "Вхідні дані (data): $data")
-        
-        // Огортаємо весь метод у блок безпеки, щоб ловити будь-які помилки
-        try {
-            val dataList = data.split("|||")
-            Log.d(TAG, "Розбитий dataList: $dataList (Елементів: ${dataList.size})")
-            
-            if (dataList.size < 2) {
-                Log.e(TAG, "Недостатньо елементів у dataList для обробки посилань! Перевірте формат даних.")
-                return false
-            }
-
-            val isAjaxList = dataList.getOrNull(1)?.toIntOrNull() != null
-
-            if (isAjaxList) { // Ajax список
-                val newsId = dataList[1]
-                Log.d(TAG, "Гілка: Плейлист через AJAX (ID новини: $newsId)")
-                
-                if (dle_login_hash.isEmpty()) {
-                    val animeUrl = "$mainUrl/$newsId-temp.html"
-                    Log.d(TAG, "dle_login_hash порожній, робимо запит до сторінки: $animeUrl")
-                    val pageDoc = app.get(animeUrl,
-                        headers = mapOf(
-                            "User-Agent" to USER_AGENT,
-                            "Referer" to mainUrl
-                        )
-                    ).document
-                    
-                    dle_login_hash = pageDoc
-                        .body()
-                        .selectFirst("script")
-                        ?.html()
-                        ?.substringAfterLast("dle_login_hash = '")
-                        ?.substringBefore("';")
-                        ?: ""
-                    Log.d(TAG, "Отримано новий dle_login_hash: $dle_login_hash")
-                }
-                
-                val ajaxUrl = "$mainUrl/engine/ajax/playlists.php?news_id=$newsId&xfield=playlist&user_hash=$dle_login_hash"
-                Log.d(TAG, "Запит плейлиста за адресою: $ajaxUrl")
-                val ajax = fromPlaylistAjax(ajaxUrl)
-                
-                val targetName = dataList[0]
-                val targetDub = dataList.getOrNull(2)?.toBoolean() ?: true
-                Log.d(TAG, "Фільтрація AJAX -> Шукаємо назву серії: '$targetName' | Озвучка (isDub): $targetDub")
-
-                val filteredAjax = ajax
-                        ?.filter { it.name == targetName }
-                        ?.filter { it.urls.isDub == targetDub }
-
-                Log.d(TAG, "Знайдено елементів після фільтрації: ${filteredAjax?.size ?: 0}")
-
-                filteredAjax?.forEach {
-                    with(it) {
-                        Log.d(TAG, "Обробка посилання плеєра: ${it.urls.playerName} (${it.urls.name}) -> ${it.urls.url}")
-                        when {
-                            it.urls.url.contains("ashdi") -> {
-                                Log.d(TAG, "Запуск AshdiExtractor для гілки AJAX...")
-                                try {
-                                    val extractedM3u8 = AshdiExtractor().ParseM3U8(this.urls.url, referer = "https://qeruya.cyou")
-                                    Log.d(TAG, "AshdiExtractor успішно повернув: $extractedM3u8")
-                                    
-                                    M3u8Helper.generateM3u8(
-                                            source = "${it.urls.playerName} (${it.urls.name})",
-                                            streamUrl = extractedM3u8,
-                                            referer = "https://qeruya.cyou")
-                                            .dropLast(1).forEach { link ->
-                                                Log.d(TAG, "Додано посилання m3u8 у плеєр: ${link.url}")
-                                                callback(link)
-                                            }
-                                } catch (e: Exception) {
-                                    Log.e(TAG, "Помилка екстракції всередині Ashdi у гілці AJAX", e)
-                                }
-                            }
-                            it.urls.url.contains("https://www.udrop.com") -> {
-                                callback.invoke(
-                                    newExtractorLink(
-                                        this.urls.url,
-                                        "${it.urls.playerName} (${it.urls.name})",
-                                        this.urls.url,
-                                        ExtractorLinkType.M3U8
-                                    )
-                                )
-                            }
-                            it.urls.url.contains("https://csst.online/embed/") ||
-                                    it.urls.url.contains("https://monstro.site/embed/") -> {
-                                csstExtractor().ParseUrl(it.urls.url).split(",").forEach { csstUrl ->
-                                    callback.invoke(
-                                        newExtractorLink(
-                                            this.urls.url,
-                                            "${it.urls.playerName} (${it.urls.name}) ${csstUrl.substringBefore("]").drop(1)}",
-                                            csstUrl.substringAfter("]"),
-                                            ExtractorLinkType.M3U8
-                                        )
-                                    )
-                                }
-                            }
-                            it.urls.url.contains("https://www.mp4upload.com/") -> {
-                                getExtractorApiFromName("Mp4Upload").getUrl(it.urls.url)?.forEach { extlink ->
-                                    callback.invoke(
-                                        newExtractorLink(
-                                                extlink.source,
-                                                "${it.urls.playerName} (${it.urls.name})",
-                                                extlink.url,
-                                        )
-                                    )
-                                }
-                            }
-                            else -> {
-                                Log.w(TAG, "Невідомий тип плеєра для URL: ${it.urls.url}")
-                            }
-                        }
-                    }
-                }
-            } else { // Прямий плеєр зі сторінки (RalodePlayer)
-                val pageUrl = dataList[1]
-                Log.d(TAG, "Гілка: RalodePlayer (Прямий плеєр). URL сторінки: $pageUrl")
-                val document = app.get(pageUrl,
+        val dataList = data.split(", ")
+        Log.d("CakesTwix-Debug", data)
+        if (dataList[1].toIntOrNull() != null) {
+            if (dle_login_hash.isEmpty()) {
+                val animeUrl = "$mainUrl/${dataList[1]}-temp.html"
+                val pageDoc = app.get(animeUrl,
                     headers = mapOf(
                         "User-Agent" to USER_AGENT,
                         "Referer" to mainUrl
                     )
                 ).document
-                
-                document.select("script").map { script ->
-                    if (script.data().contains("RalodePlayer.init(")) {
-                        var latestNumber: Int? = 0
-                        val constructors = fromVideoContructor(script)
-                        Log.d(TAG, "Знайдено відео-конструкторів у Ralode: ${constructors.size}")
 
-                        constructors.forEach { dub ->
-                            if (dub.episodeName == "ПЛЕЙЛИСТ") return@forEach
+                dle_login_hash = pageDoc
+                    .body()
+                    .selectFirst("script")
+                    ?.html()
+                    ?.substringAfterLast("dle_login_hash = '")
+                    ?.substringBefore("';")
+                    ?: ""
+            }
 
-                            if (dub.episodeNumber == null) {
-                                dub.episodeNumber = latestNumber?.plus(1)
-                            }
+            val ajax =
+                    fromPlaylistAjax(
+                            "$mainUrl/engine/ajax/playlists.php?news_id=${dataList[1]}&xfield=playlist&user_hash=$dle_login_hash")
 
-                            latestNumber = dub.episodeNumber
-                            
-                            if (latestNumber != dataList[0].toIntOrNull()) return@forEach
-
-                            Log.d(TAG, "Збіг серії у Ralode знайдено! Плеєр: ${dub.playerName}, URL: ${dub.episodeUrl}")
-
-                            with(dub.episodeUrl) {
-                                when {
-                                    contains("ashdi") -> {
-                                        Log.d(TAG, "Запуск AshdiExtractor для гілки Ralode...")
-                                        try {
-                                            val extractedM3u8 = AshdiExtractor().ParseM3U8(this, referer = "https://qeruya.cyou")
-                                            Log.d(TAG, "AshdiExtractor успішно повернув (Ralode): $extractedM3u8")
-                                            
-                                            M3u8Helper.generateM3u8(
-                                                    source = dub.playerName,
-                                                    streamUrl = extractedM3u8,
-                                                    referer = "https://qeruya.cyou")
-                                                    .dropLast(1).forEach(callback)
-                                        } catch (e: Exception) {
-                                            Log.e(TAG, "Помилка екстракції всередині Ashdi у гілці Ralode", e)
-                                        }
-                                    }
-                                    contains("https://www.udrop.com") -> {
+            ajax
+                    ?.filter { it.name == dataList[0] }
+                    ?.filter { it.urls.isDub == dataList[2].toBoolean() }
+                    ?.forEach {
+                        with(it) {
+                            when {
+                                // FIX #3: tortuga видалено
+                                it.urls.url.contains("https://ashdi.vip/vod") -> {
+                                    M3u8Helper.generateM3u8(
+                                            source = "${it.urls.playerName} (${it.urls.name})",
+                                            streamUrl = AshdiExtractor().ParseM3U8(this.urls.url),
+                                            referer = "https://qeruya.cyou")
+                                            .dropLast(1).forEach(callback)
+                                }
+                                it.urls.url.contains("https://www.udrop.com") -> {
+                                    callback.invoke(
+                                        newExtractorLink(
+                                            this.urls.url,
+                                            "${it.urls.playerName} (${it.urls.name})",
+                                            this.urls.url,
+                                            ExtractorLinkType.M3U8
+                                        )
+                                    )
+                                }
+                                it.urls.url.contains("https://csst.online/embed/") ||
+                                        it.urls.url.contains("https://monstro.site/embed/") -> {
+                                    csstExtractor().ParseUrl(it.urls.url).split(",").forEach { csstUrl ->
                                         callback.invoke(
                                             newExtractorLink(
-                                                    dub.playerName,
-                                                    name = dub.playerName,
-                                                    this,
-                                                )
+                                                this.urls.url,
+                                                "${it.urls.playerName} (${it.urls.name}) ${csstUrl.substringBefore("]").drop(1)}",
+                                                csstUrl.substringAfter("]"),
+                                                ExtractorLinkType.M3U8
+                                            )
                                         )
                                     }
-                                    contains("https://monstro.site/embed/") ||
-                                            contains("https://csst.online/embed/") -> {
-                                        csstExtractor().ParseUrl(this).split(",").forEach {
-                                            callback.invoke(
-                                                newExtractorLink(
-                                                    dub.playerName,
-                                                    name =
-                                                    "${dub.playerName.replace("\"", "")} ${it.substringBefore("]").drop(1)}",
-                                                    it.substringAfter("]"),
-                                                )
-                                            )
-                                        }
-                                    }
-                                    contains("https://www.mp4upload.com/") -> {
-                                        getExtractorApiFromName("Mp4Upload").getUrl(this)?.forEach { extlink ->
-                                            callback.invoke(
-                                                newExtractorLink(
+                                }
+                                it.urls.url.contains("https://www.mp4upload.com/") -> {
+                                    getExtractorApiFromName("Mp4Upload").getUrl(it.urls.url)?.forEach { extlink ->
+                                        callback.invoke(
+                                            newExtractorLink(
                                                     extlink.source,
-                                                    dub.playerName,
+                                                    "${it.urls.playerName} (${it.urls.name})",
                                                     extlink.url,
-                                                )
                                             )
-                                        }
-                                    }
-                                    else -> {
-                                        Log.w(TAG, "Невідомий тип плеєра у Ralode для URL: $this")
+                                        )
                                     }
                                 }
+                                else -> {}
+                            }
+                        }
+                    }
+        } else {
+            val document = app.get(dataList[1],
+                headers = mapOf(
+                    "User-Agent" to USER_AGENT,
+                    "Referer" to mainUrl
+                )
+            ).document
+            document.select("script").map { script ->
+                if (script.data().contains("RalodePlayer.init(")) {
+                    var latestNumber: Int? = 0
+                    fromVideoContructor(script).forEach { dub ->
+                        if (dub.episodeName == "ПЛЕЙЛИСТ") return@forEach
+
+                        if (dub.episodeNumber == null) {
+                            dub.episodeNumber = latestNumber?.plus(1)
+                        }
+
+                        latestNumber = dub.episodeNumber
+                        if (latestNumber != dataList[0].toIntOrNull()) return@forEach
+
+                        with(dub.episodeUrl) {
+                            when {
+                                // FIX #3: tortuga видалено
+                                contains("https://ashdi.vip/vod") -> {
+                                    M3u8Helper.generateM3u8(
+                                            source = dub.playerName,
+                                            streamUrl = AshdiExtractor().ParseM3U8(this),
+                                            referer = "https://qeruya.cyou")
+                                            .dropLast(1).forEach(callback)
+                                }
+                                contains("https://www.udrop.com") -> {
+                                    callback.invoke(
+                                        newExtractorLink(
+                                                dub.playerName,
+                                                name = dub.playerName,
+                                                this,
+                                            )
+                                    )
+                                }
+                                contains("https://monstro.site/embed/") ||
+                                        contains("https://csst.online/embed/") -> {
+                                    csstExtractor().ParseUrl(this).split(",").forEach {
+                                        callback.invoke(
+                                            newExtractorLink(
+                                                dub.playerName,
+                                                name =
+                                                "${dub.playerName.replace("\"", "")} ${it.substringBefore("]").drop(1)}",
+                                                it.substringAfter("]"),
+                                            )
+                                        )
+                                    }
+                                }
+                                contains("https://www.mp4upload.com/") -> {
+                                    getExtractorApiFromName("Mp4Upload").getUrl(this)?.forEach { extlink ->
+                                        callback.invoke(
+                                            newExtractorLink(
+                                                extlink.source,
+                                                dub.playerName,
+                                                extlink.url,
+                                            )
+                                        )
+                                    }
+                                }
+                                else -> {}
                             }
                         }
                     }
                 }
             }
-        } catch (e: Throwable) {
-            Log.e(TAG, "КРИТИЧНА ПОМИЛКА ВСЕРЕДИНІ loadLinks!", e)
         }
-        
-        Log.d(TAG, "==== END LOAD LINKS ====")
         return true
     }
 
@@ -439,8 +359,8 @@ class AnitubeinuaProvider : MainAPI() {
 
     data class Responses(val success: Boolean?, val response: String?, val message: String?)
 
+    // FIX #2: виправлено визначення isDub та listPlayers
     private suspend fun fromPlaylistAjax(url: String, referer: String = "https://anitube.in.ua/"): List<Ajax>? {
-        Log.d(TAG, "Виклик віджера Ajax за URL: $url")
         val responseGet = app.get(
             url,
             referer = referer,
@@ -450,61 +370,46 @@ class AnitubeinuaProvider : MainAPI() {
             )
         ).parsedSafe<Responses>()
 
-        if (responseGet?.success == false || responseGet?.response.isNullOrEmpty()) {
-            Log.w(TAG, "AJAX плейлист повернув пусту відповідь або помилку сервера")
+        if (responseGet?.success == false) {
             return null
         }
 
         val returnEpisodes = mutableListOf<Ajax>()
+
         val playlist = Jsoup.parse(responseGet?.response!!)
+
+        // List 0: ОЗВУЧЕННЯ / СУБТИТРИ  — визначає isDub
+        // List 1: студія (напр. "Робота Голосом") — ігнорується
+        // List 2: плеєри (ПЛЕЄР ASHDI / ПЛЕЄР MOON) — завжди останній список
+        val allLists = playlist.select(".playlists-lists .playlists-items")
+
         val audios = mutableListOf<Pair<String, String>>()
-        val listDubStatus = mutableListOf<Pair<String, String>>()
         val listPlayers = mutableListOf<Pair<String, String>>()
-        
-        playlist.select(".playlists-lists .playlists-items:first-child li").forEach {
+
+        allLists.firstOrNull()?.select("li")?.forEach {
             audios.add(Pair(it.text(), it.attr("data-id")))
         }
-        
-        val itemsCount = playlist.select(".playlists-lists .playlists-items").count()
-        Log.d(TAG, "Кількість контейнерів селектора у плейлисті: $itemsCount")
-
-        if (itemsCount == 3) {
-            playlist.select(".playlists-lists .playlists-items:nth-child(3) li").forEach {
-                listPlayers.add(Pair(it.text(), it.attr("data-id")))
-            }
-            playlist.select(".playlists-lists .playlists-items:nth-child(2) li").forEach {
-                listDubStatus.add(Pair(it.text(), it.attr("data-id")))
-            }
-        } else {
-            playlist.select(".playlists-lists .playlists-items:nth-child(2) li").forEach {
-                listPlayers.add(Pair(it.text(), it.attr("data-id")))
-            }
+        allLists.lastOrNull()?.select("li")?.forEach {
+            listPlayers.add(Pair(it.text(), it.attr("data-id")))
         }
-        
-        Log.d(TAG, "Розпарсено категорій плейлиста -> Аудіо: ${audios.size}, Плеєри: ${listPlayers.size}, Озвучки: ${listDubStatus.size}")
 
         playlist.select(".playlists-videos .playlists-items li").forEach { element ->
             val audioId = element.attr("data-id")
             val episodeId = extractIntFromString(element.text())
             val url = element.attr("data-file")
 
+            // moonanime.art не підтримується
+            if (url.contains("moonanime.art")) return@forEach
+
             var isDub = true
             var audio: String? = null
             var playerName = ""
 
+            // isDub береться з audios: "ОЗВУЧЕННЯ" -> true, "СУБТИТРИ" -> false
             audios.forEach {
                 if (audioId.startsWith(it.second)) {
                     audio = it.first
-                }
-            }
-
-            if (audioId.count { it == '_' } == 3) {
-                listDubStatus.forEach {
-                    if (audioId.startsWith(it.second)) {
-                        if (it.first == "СУБТИТРИ") {
-                            isDub = false
-                        }
-                    }
+                    isDub = !it.first.contains("СУБТИТРИ", ignoreCase = true)
                 }
             }
 
@@ -530,34 +435,30 @@ class AnitubeinuaProvider : MainAPI() {
     }
 
     private fun fromVideoContructor(script: Element): List<videoConstructor> {
-        val returnEpisodes = mutableListOf<videoConstructor>()
-        try {
-            val playerScriptRawJson = script.data().substringAfterLast(".init(").substringBefore(");")
-            val playerEpisodesRawJson = playerScriptRawJson.substringAfter("],").substringBeforeLast(",")
-            val playerNamesArray =
-                    (playerScriptRawJson.substringBefore("],") + "]")
-                            .dropLast(1)
-                            .drop(1)
-                            .replace("\",\"", ",,,")
-                            .split(",,,")
+        val playerScriptRawJson = script.data().substringAfterLast(".init(").substringBefore(");")
+        val playerEpisodesRawJson = playerScriptRawJson.substringAfter("],").substringBeforeLast(",")
+        val playerNamesArray =
+                (playerScriptRawJson.substringBefore("],") + "]")
+                        .dropLast(1)
+                        .drop(1)
+                        .replace("\",\"", ",,,")
+                        .split(",,,")
 
-            val jsonEpisodes = tryParseJson<List<List<PlayerJson>>>(playerEpisodesRawJson)!!
+        val jsonEpisodes = tryParseJson<List<List<PlayerJson>>>(playerEpisodesRawJson)!!
+        val episodes = mutableListOf<videoConstructor>()
 
-            jsonEpisodes.forEachIndexed { index, episode ->
-                val playerName = decode(playerNamesArray[index])
-                episode.forEach {
-                    returnEpisodes.add(
-                            videoConstructor(
-                                    playerName,
-                                    it.name,
-                                    extractIntFromString(it.name),
-                                    Jsoup.parse(it.code).select("iframe").attr("src")))
-                }
+        jsonEpisodes.forEachIndexed { index, episode ->
+            val playerName = decode(playerNamesArray[index])
+            episode.forEach {
+                episodes.add(
+                        videoConstructor(
+                                playerName,
+                                it.name,
+                                extractIntFromString(it.name),
+                                Jsoup.parse(it.code).select("iframe").attr("src")))
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "Помилка обробки у fromVideoContructor", e)
         }
-        return returnEpisodes.toList()
+        return episodes.toList()
     }
 
     private fun extractIntFromString(string: String): Int? {
