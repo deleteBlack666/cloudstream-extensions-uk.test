@@ -34,14 +34,14 @@ class AnitubeinuaProvider : MainAPI() {
             )
 
     // Sections
+    // Fix #1: removed "Популярні" section — URL /f/sort=rating/order=desc/page/ no longer exists on the site
     override val mainPage =
             mainPageOf(
                     "$mainUrl/anime/page/" to "Нові",
-                    "$mainUrl/f/sort=rating/order=desc/page/" to "Популярні",
             )
 
     private var dle_login_hash = ""
-    
+
     companion object {
         private const val USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0"
     }
@@ -54,25 +54,28 @@ class AnitubeinuaProvider : MainAPI() {
             )
         ).document
 
-        val home = document.select(".story").map { it.toSearchResponse() }
+        // Fix #2: site redesigned HTML — cards now use article.short, not .story
+        val home = document.select("article.short").map { it.toSearchResponse() }
         return newHomePageResponse(request.name, home)
     }
 
+    // Fix #2: updated selectors to match the new site layout
+    // Old: .story_c h2 a / .story_c_l span.story_post img / .box .sub / .box .ukr
+    // New: a.short-title h2 / .short-img img / .short-meta text content
     private fun Element.toSearchResponse(): AnimeSearchResponse {
-        val title = this.selectFirst(".story_c h2 a, div.text_content a")?.text()?.trim().toString()
-        val href = this.selectFirst(".story_c h2 a, div.text_content a")?.attr("href").toString()
-        var posterUrl = this.selectFirst(".story_c_l span.story_post img")?.attr("src")
+        val title = this.selectFirst("a.short-title h2")?.text()?.trim().toString()
+        val href = this.selectFirst("a.short-title")?.attr("href").toString()
+        var posterUrl = this.selectFirst(".short-img img")?.attr("src")
         // For recommendations
         if (posterUrl.isNullOrEmpty()) posterUrl = this.selectFirst("a img")?.attr("data-src")
 
-        var isSub = this.select(".box .sub").isNotEmpty()
-        var isDub = this.select(".box .ukr").isNotEmpty()
-        if (!isSub && !isDub) {
-            isSub = true
-            isDub = true
-        }
+        // New site uses .short-meta text: "Озв+Суб", "Озвучування", "Субтитри"
+        val labelText = this.selectFirst(".short-meta")?.text()?.trim() ?: ""
+        val isDub = labelText.contains("Озв", ignoreCase = true)
+        val isSub = labelText.contains("Суб", ignoreCase = true)
+
         return newAnimeSearchResponse(title, href, TvType.Anime) {
-            this.posterUrl = mainUrl + posterUrl
+            this.posterUrl = if (posterUrl?.startsWith("/") == true) mainUrl + posterUrl else posterUrl
             addDubStatus(isDub, isSub)
         }
     }
@@ -94,7 +97,8 @@ class AnitubeinuaProvider : MainAPI() {
                         ))
                         .document
 
-        return document.select("article.story").map { it.toSearchResponse() }
+        // Search results also use article.short
+        return document.select("article.short").map { it.toSearchResponse() }
     }
 
     // Detailed information
@@ -106,23 +110,34 @@ class AnitubeinuaProvider : MainAPI() {
             )
         ).document
 
-        val someInfo = document.select(".story_c_r")
+        // Fix #2: updated selectors to match the new site layout
+        // Old selectors: .story_c h2, .story_c_left span.story_post img, .story_c_r, div.my-text, .lexington-box
+        // New selectors: .full_title h1, .full_poster img, .full_list-col, .full_desc, (no rating visible)
+        val title = document.selectFirst(".full_title h1")?.text()?.trim().toString()
+        val poster = document.selectFirst(".full_poster img")?.attr("src")?.let {
+            if (it.startsWith("/")) mainUrl + it else it
+        }
 
-        // Parse info
-        val title = document.selectFirst(".story_c h2")?.text()?.trim().toString()
-        val poster = mainUrl + document.selectFirst(".story_c_left span.story_post img")?.attr("src")
-        val tags = someInfo.select("a[href*=/anime/]").map { it.text() }
-        val year = someInfo.select("a[href*=/xfsearch/year/]").text().toIntOrNull()
+        val infoList = document.select(".full_list-col li")
+        val tags = infoList
+            .filter { it.text().contains("Жанр", ignoreCase = true) }
+            .flatMap { it.select("a") }
+            .map { it.text() }
+        val year = infoList
+            .filter { it.text().contains("Рік", ignoreCase = true) }
+            .firstOrNull()
+            ?.selectFirst("a")
+            ?.text()
+            ?.toIntOrNull()
 
         val tvType = TvType.Anime
-        val description = document.selectFirst("div.my-text")?.text()?.trim()
-        // val author = someInfo.select("strong:contains(Студія:)").next().html()
+        val description = document.selectFirst(".full_desc")?.ownText()?.trim()
         val trailer = document.selectFirst(".rcol a.rollover")?.attr("href").toString()
-        val rating = document.selectFirst(".lexington-box > div:last-child span")?.text()
+        // Rating is no longer present in the new layout
+        val rating = null
 
         val recommendations = document.select(".horizontal ul li").map { it.toSearchResponse() }
 
-        // Return to app
         // Players, Episodes, Number of episodes
         val subEpisodes = mutableListOf<Episode>()
         val dubEpisodes = mutableListOf<Episode>()
@@ -170,7 +185,6 @@ class AnitubeinuaProvider : MainAPI() {
                     val episodesList = fromVideoContructor(script)
 
                     episodesList.forEach { episode ->
-                        // UFDub player, drop
                         var varEpisodeNumber = episode.episodeNumber
                         if (episode.episodeName == "ПЛЕЙЛИСТ") return@forEach
                         if (varEpisodeNumber == null) {
@@ -211,16 +225,15 @@ class AnitubeinuaProvider : MainAPI() {
         val dataList = data.split(", ")
         Log.d("CakesTwix-Debug", data)
         if (dataList[1].toIntOrNull() != null) { // Its ajax list
-            // If dle_login_hash is empty, fetch it from the anime page
             if (dle_login_hash.isEmpty()) {
-                val animeUrl = "$mainUrl/${dataList[1]}-temp.html" // construct URL from ID
+                val animeUrl = "$mainUrl/${dataList[1]}-temp.html"
                 val pageDoc = app.get(animeUrl,
                     headers = mapOf(
                         "User-Agent" to USER_AGENT,
                         "Referer" to mainUrl
                     )
                 ).document
-                
+
                 dle_login_hash = pageDoc
                     .body()
                     .selectFirst("script")
@@ -229,7 +242,7 @@ class AnitubeinuaProvider : MainAPI() {
                     ?.substringBefore("';")
                     ?: ""
             }
-            
+
             val ajax =
                     fromPlaylistAjax(
                             "$mainUrl/engine/ajax/playlists.php?news_id=${dataList[1]}&xfield=playlist&user_hash=$dle_login_hash")
@@ -239,16 +252,9 @@ class AnitubeinuaProvider : MainAPI() {
                     ?.filter { it.name == dataList[0] }
                     ?.filter { it.urls.isDub == dataList[2].toBoolean() }
                     ?.forEach {
-                        // Get m3u8 url
                         with(it) {
                             when {
-                                it.urls.url.contains("https://tortuga.wtf/vod/") -> {
-                                    M3u8Helper.generateM3u8(
-                                            source = "${it.urls.playerName} (${it.urls.name})",
-                                            streamUrl = AshdiExtractor().ParseM3U8(this.urls.url),
-                                            referer = "https://tortuga.wtf/")
-                                            .dropLast(1).forEach(callback)
-                                }
+                                // Fix #2: ashdi.vip handler — kept as-is, still a valid extractor
                                 it.urls.url.contains("https://ashdi.vip/vod") -> {
                                     M3u8Helper.generateM3u8(
                                             source = "${it.urls.playerName} (${it.urls.name})",
@@ -307,8 +313,6 @@ class AnitubeinuaProvider : MainAPI() {
                     fromVideoContructor(script).forEach { dub ->
                         if (dub.episodeName == "ПЛЕЙЛИСТ") return@forEach
 
-                        // Parse by number episode
-                        // If null, just add +1
                         if (dub.episodeNumber == null) {
                             dub.episodeNumber = latestNumber?.plus(1)
                         }
@@ -318,13 +322,7 @@ class AnitubeinuaProvider : MainAPI() {
 
                         with(dub.episodeUrl) {
                             when {
-                                contains("https://tortuga.wtf/vod/") -> {
-                                    M3u8Helper.generateM3u8(
-                                            source = dub.playerName,
-                                            streamUrl = AshdiExtractor().ParseM3U8(this),
-                                            referer = "https://tortuga.wtf/")
-                                            .dropLast(1).forEach(callback)
-                                }
+                                // Fix #2: ashdi.vip handler — kept as-is
                                 contains("https://ashdi.vip/vod") -> {
                                     M3u8Helper.generateM3u8(
                                             source = dub.playerName,
@@ -376,7 +374,6 @@ class AnitubeinuaProvider : MainAPI() {
     }
 
     private fun decode(input: String): String {
-        // Decoded string, thanks to Secozzi
         val hexRegex = Regex("\\\\u([0-9a-fA-F]{4})")
         return hexRegex.replace(input) { matchResult ->
             Integer.parseInt(matchResult.groupValues[1], 16).toChar().toString()
@@ -385,8 +382,6 @@ class AnitubeinuaProvider : MainAPI() {
 
     data class Responses(val success: Boolean?, val response: String?, val message: String?)
 
-    // Thanks to Andro999b
-    // https://github.com/Andro999b/movies-telegram-bot/blob/a296c7d4122a25fa70b612e75d741dd55c154640/functions/src/providers/AnitubeUAProvider.ts#L86-L137
     private suspend fun fromPlaylistAjax(url: String, referer: String = "https://anitube.in.ua/"): List<Ajax>? {
         val responseGet = app.get(
             url,
@@ -397,63 +392,47 @@ class AnitubeinuaProvider : MainAPI() {
             )
         ).parsedSafe<Responses>()
 
-        // Not Ajax, return null
         if (responseGet?.success == false) {
-            // Log.d("load-debug", "Not Ajax")
             return null
         }
 
         val returnEpisodes = mutableListOf<Ajax>()
 
         val playlist = Jsoup.parse(responseGet?.response!!)
-        val audios = mutableListOf<Pair<String, String>>() // (INARI, 0_0, ...)
-        val listDubStatus = mutableListOf<Pair<String, String>>() // (СУБТИТРИ, 0_0_0, ...)
-        val listPlayers = mutableListOf<Pair<String, String>>() // (ПЛЕЄР МОНСТР, 0_0_0_0, ...)
-        playlist.select(".playlists-lists .playlists-items:first-child li").forEach {
+
+        // List 0: ОЗВУЧЕННЯ / СУБТИТРИ  — determines isDub
+        // List 1: studio name (e.g. "Робота Голосом") — ignored, was wrongly used as dub/sub before
+        // List 2: player names (ПЛЕЄР ASHDI / ПЛЕЄР MOON) — always the last playlists-items
+        val allLists = playlist.select(".playlists-lists .playlists-items")
+
+        val audios = mutableListOf<Pair<String, String>>()   // (name, data-id prefix)
+        val listPlayers = mutableListOf<Pair<String, String>>() // (name, data-id prefix)
+
+        allLists.firstOrNull()?.select("li")?.forEach {
             audios.add(Pair(it.text(), it.attr("data-id")))
         }
-        // Set listPlayers and listDubStatus
-        // If has subs - So players in 3 index
-        if (playlist.select(".playlists-lists .playlists-items").count() == 3) {
-            // Players
-            playlist.select(".playlists-lists .playlists-items:nth-child(3) li").forEach {
-                listPlayers.add(Pair(it.text(), it.attr("data-id")))
-            }
-            // Subs/Dubs index
-            playlist.select(".playlists-lists .playlists-items:nth-child(2) li").forEach {
-                listDubStatus.add(Pair(it.text(), it.attr("data-id")))
-            }
-        } else {
-            // No subs
-            // Players
-            playlist.select(".playlists-lists .playlists-items:nth-child(2) li").forEach {
-                listPlayers.add(Pair(it.text(), it.attr("data-id")))
-            }
+        allLists.lastOrNull()?.select("li")?.forEach {
+            listPlayers.add(Pair(it.text(), it.attr("data-id")))
         }
-        // Parse episodes
+
         playlist.select(".playlists-videos .playlists-items li").forEach { element ->
-            val audioId = element.attr("data-id") // 0_0_0 or 0_0_0_0 if subs
+            val audioId = element.attr("data-id")
             val episodeId = extractIntFromString(element.text())
             val url = element.attr("data-file")
+
+            // Skip moonanime.art — not supported
+            if (url.contains("moonanime.art")) return@forEach
 
             var isDub = true
             var audio: String? = null
             var playerName = ""
 
-            // Set this element Dub name
+            // isDub is derived directly from the audios list:
+            // "ОЗВУЧЕННЯ" -> isDub=true, "СУБТИТРИ" -> isDub=false
             audios.forEach {
                 if (audioId.startsWith(it.second)) {
                     audio = it.first
-                }
-            }
-
-            if (audioId.count { it == '_' } == 3) {
-                listDubStatus.forEach {
-                    if (audioId.startsWith(it.second)) {
-                        if (it.first == "СУБТИТРИ") {
-                            isDub = false
-                        }
-                    }
+                    isDub = !it.first.contains("СУБТИТРИ", ignoreCase = true)
                 }
             }
 
@@ -487,7 +466,6 @@ class AnitubeinuaProvider : MainAPI() {
                         .drop(1)
                         .replace("\",\"", ",,,")
                         .split(",,,")
-        // val numberOfEpisodesInt = playerScriptRawJson.substringAfterLast(",").toIntOrNull()
 
         val jsonEpisodes = tryParseJson<List<List<PlayerJson>>>(playerEpisodesRawJson)!!
         val episodes = mutableListOf<videoConstructor>()
@@ -501,7 +479,6 @@ class AnitubeinuaProvider : MainAPI() {
                                 it.name,
                                 extractIntFromString(it.name),
                                 Jsoup.parse(it.code).select("iframe").attr("src")))
-                // Log.d("load-debug", "$playerName ${it.name}")
             }
         }
         return episodes.toList()
