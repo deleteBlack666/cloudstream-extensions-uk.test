@@ -33,7 +33,6 @@ class AnitubeinuaProvider : MainAPI() {
                     TvType.Anime,
             )
 
-    // FIX #1: прибрано "Популярні" — URL /f/sort=rating/order=desc/page/ більше не існує
     override val mainPage =
             mainPageOf(
                     "$mainUrl/anime/page/" to "Нові",
@@ -61,7 +60,6 @@ class AnitubeinuaProvider : MainAPI() {
         val title = this.selectFirst(".story_c h2 a, div.text_content a")?.text()?.trim().toString()
         val href = this.selectFirst(".story_c h2 a, div.text_content a")?.attr("href").toString()
         var posterUrl = this.selectFirst(".story_c_l span.story_post img")?.attr("src")
-        // For recommendations
         if (posterUrl.isNullOrEmpty()) posterUrl = this.selectFirst("a img")?.attr("data-src")
 
         var isSub = this.select(".box .sub").isNotEmpty()
@@ -96,7 +94,6 @@ class AnitubeinuaProvider : MainAPI() {
         return document.select("article.story").map { it.toSearchResponse() }
     }
 
-    // Detailed information — оригінальні селектори збережено
     override suspend fun load(url: String): AnimeLoadResponse {
         val document = app.get(url,
             headers = mapOf(
@@ -231,11 +228,12 @@ class AnitubeinuaProvider : MainAPI() {
                     ?.forEach {
                         with(it) {
                             when {
-                                // FIX #3: tortuga видалено
-                                it.urls.url.contains("https://ashdi.vip/vod") -> {
+                                // Гілка AJAX: виправлено валідацію посилань Ashdi
+                                it.urls.url.contains("ashdi.vip") -> {
+                                    val fixedUrl = if (it.urls.url.startsWith("//")) "https:${it.urls.url}" else it.urls.url
                                     M3u8Helper.generateM3u8(
                                             source = "${it.urls.playerName} (${it.urls.name})",
-                                            streamUrl = AshdiExtractor().ParseM3U8(this.urls.url),
+                                            streamUrl = AshdiExtractor().ParseM3U8(fixedUrl.replace("/embed/", "/vod/")),
                                             referer = "https://qeruya.cyou")
                                             .dropLast(1).forEach(callback)
                                 }
@@ -299,11 +297,12 @@ class AnitubeinuaProvider : MainAPI() {
 
                         with(dub.episodeUrl) {
                             when {
-                                // FIX #3: tortuga видалено
-                                contains("https://ashdi.vip/vod") -> {
+                                // Гілка RalodePlayer: тепер Ashdi працює і тут!
+                                contains("ashdi.vip") -> {
+                                    val fixedUrl = if (this.startsWith("//")) "https:$this" else this
                                     M3u8Helper.generateM3u8(
                                             source = dub.playerName,
-                                            streamUrl = AshdiExtractor().ParseM3U8(this),
+                                            streamUrl = AshdiExtractor().ParseM3U8(fixedUrl.replace("/embed/", "/vod/")),
                                             referer = "https://qeruya.cyou")
                                             .dropLast(1).forEach(callback)
                                 }
@@ -359,7 +358,6 @@ class AnitubeinuaProvider : MainAPI() {
 
     data class Responses(val success: Boolean?, val response: String?, val message: String?)
 
-    // FIX #2: виправлено визначення isDub та listPlayers
     private suspend fun fromPlaylistAjax(url: String, referer: String = "https://anitube.in.ua/"): List<Ajax>? {
         val responseGet = app.get(
             url,
@@ -375,12 +373,7 @@ class AnitubeinuaProvider : MainAPI() {
         }
 
         val returnEpisodes = mutableListOf<Ajax>()
-
         val playlist = Jsoup.parse(responseGet?.response!!)
-
-        // List 0: ОЗВУЧЕННЯ / СУБТИТРИ  — визначає isDub
-        // List 1: студія (напр. "Робота Голосом") — ігнорується
-        // List 2: плеєри (ПЛЕЄР ASHDI / ПЛЕЄР MOON) — завжди останній список
         val allLists = playlist.select(".playlists-lists .playlists-items")
 
         val audios = mutableListOf<Pair<String, String>>()
@@ -398,14 +391,12 @@ class AnitubeinuaProvider : MainAPI() {
             val episodeId = extractIntFromString(element.text())
             val url = element.attr("data-file")
 
-            // moonanime.art не підтримується
             if (url.contains("moonanime.art")) return@forEach
 
             var isDub = true
             var audio: String? = null
             var playerName = ""
 
-            // isDub береться з audios: "ОЗВУЧЕННЯ" -> true, "СУБТИТРИ" -> false
             audios.forEach {
                 if (audioId.startsWith(it.second)) {
                     audio = it.first
