@@ -385,7 +385,7 @@ class AnitubeinuaProvider : MainAPI() {
 
     data class Responses(val success: Boolean?, val response: String?, val message: String?)
 
-    private suspend fun fromPlaylistAjax(url: String, referer: String = "https://anitube.in.ua/"): List<Ajax>? {
+        private suspend fun fromPlaylistAjax(url: String, referer: String = "https://anitube.in.ua/"): List<Ajax>? {
         val responseGet = app.get(
             url,
             referer = referer,
@@ -403,50 +403,61 @@ class AnitubeinuaProvider : MainAPI() {
         val playlist = Jsoup.parse(responseGet?.response!!)
         val allLists = playlist.select(".playlists-lists .playlists-items")
 
-        val audios = mutableListOf<Pair<String, String>>()
-        val listPlayers = mutableListOf<Pair<String, String>>()
+        // Мапи для збереження ієрархічних зв'язків: data-id -> Назва
+        val categoriesMap = mutableMapOf<String, String>()
+        val studiosMap = mutableMapOf<String, String>()
+        val playersMap = mutableMapOf<String, String>()
 
-        allLists.firstOrNull()?.select("li")?.forEach {
-            audios.add(Pair(it.text(), it.attr("data-id")))
+        // Блок 0 (індекс 0) — Кореневі категорії (напр. "0_0" -> СУБТИТРИ, "0_1" -> ОЗВУЧЕННЯ)
+        allLists.getOrNull(0)?.select("li")?.forEach {
+            categoriesMap[it.attr("data-id").trim()] = it.text().trim()
         }
-        allLists.lastOrNull()?.select("li")?.forEach {
-            listPlayers.add(Pair(it.text(), it.attr("data-id")))
+
+        // Блок 1 (індекс 1) — Конкретні студії (напр. "0_1_2" -> Didko Studio)
+        allLists.getOrNull(1)?.select("li")?.forEach {
+            studiosMap[it.attr("data-id").trim()] = it.text().trim()
+        }
+
+        // Блок 2 (індекс 2) — Назви плеєрів (напр. "0_1_2_0" -> ПЛЕЄР ASHDI)
+        allLists.getOrNull(2)?.select("li")?.forEach {
+            playersMap[it.attr("data-id").trim()] = it.text().trim()
         }
 
         playlist.select(".playlists-videos .playlists-items li").forEach { element ->
-            val audioId = element.attr("data-id")
+            val videoDataId = element.attr("data-id").trim()
             val episodeId = extractIntFromString(element.text())
-            val url = element.attr("data-file")
+            val fileUrl = element.attr("data-file").trim()
 
-            if (url.contains("moonanime.art")) return@forEach
+            if (fileUrl.contains("moonanime.art")) return@forEach
 
-            var isDub = true
-            var audio: String? = null
-            var playerName = ""
+            val segments = videoDataId.split("_")
+            
+            // Будуємо ключі для пошуку по ієрархії дерева плейлиста
+            val catId = segments.take(2).joinToString("_")    // "0_1"
+            val studioId = segments.take(3).joinToString("_") // "0_1_2"
 
-            audios.forEach {
-                if (audioId.startsWith(it.second)) {
-                    audio = it.first
-                    isDub = !it.first.contains("СУБТИТРИ", ignoreCase = true)
-                }
-            }
+            // Визначаємо категорію (за замовчуванням ОЗВУЧЕННЯ) та статус сабів
+            val categoryName = categoriesMap[catId] ?: "ОЗВУЧЕННЯ"
+            val isDub = !categoryName.contains("СУБТИТРИ", ignoreCase = true)
 
-            listPlayers.forEach {
-                if (audioId.startsWith(it.second)) {
-                    playerName = it.first
-                }
-            }
+            // Шукаємо назву студії за 3-сегментним префіксом. Fallback на назву категорії, якщо студія відсутня
+            val studioName = studiosMap[studioId] ?: categoryName
+
+            // Визначаємо назву плеєра за повним 4-сегментним id
+            val playerName = playersMap[videoDataId] ?: "Плеєр"
 
             returnEpisodes.add(
-                    Ajax(
-                            episodeId,
-                            element.text(),
-                            Link(
-                                    isDub,
-                                    url,
-                                    audio.toString(),
-                                    playerName,
-                            )))
+                Ajax(
+                    episodeId,
+                    element.text(),
+                    Link(
+                        isDub,
+                        fileUrl,
+                        studioName, // Записуємо назву студії замість категорії
+                        playerName
+                    )
+                )
+            )
         }
 
         return returnEpisodes.toList()
