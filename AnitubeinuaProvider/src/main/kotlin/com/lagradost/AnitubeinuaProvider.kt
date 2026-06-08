@@ -35,10 +35,9 @@ class AnitubeinuaProvider : MainAPI() {
 
     // Sections
     // Fix #1: removed "Популярні" section — URL /f/sort=rating/order=desc/page/ no longer exists on the site
-    // Root page paginates via /page/N/, not /anime/page/N/
     override val mainPage =
             mainPageOf(
-                    "$mainUrl/page/" to "Нові",
+                    "$mainUrl/anime/page/" to "Нові",
             )
 
     private var dle_login_hash = ""
@@ -55,28 +54,28 @@ class AnitubeinuaProvider : MainAPI() {
             )
         ).document
 
-        // Fix #2: site redesigned HTML — cards now use article.short, not .story
-        val home = document.select("article.short").map { it.toSearchResponse() }
+        // /anime/page/N uses .story cards (different from root page which uses article.short)
+        val home = document.select(".story").map { it.toSearchResponse() }
         return newHomePageResponse(request.name, home)
     }
 
     // Fix #2: updated selectors to match the new site layout
     // Old: .story_c h2 a / .story_c_l span.story_post img / .box .sub / .box .ukr
-    // New: a.short-title h2 / .short-img img / .short-meta text content
     private fun Element.toSearchResponse(): AnimeSearchResponse {
-        val title = this.selectFirst("a.short-title h2")?.text()?.trim().toString()
-        val href = this.selectFirst("a.short-title")?.attr("href").toString()
-        var posterUrl = this.selectFirst(".short-img img")?.attr("src")
+        val title = this.selectFirst(".story_c h2 a, div.text_content a")?.text()?.trim().toString()
+        val href = this.selectFirst(".story_c h2 a, div.text_content a")?.attr("href").toString()
+        var posterUrl = this.selectFirst(".story_c_l span.story_post img")?.attr("src")
         // For recommendations
         if (posterUrl.isNullOrEmpty()) posterUrl = this.selectFirst("a img")?.attr("data-src")
 
-        // New site uses .short-meta text: "Озв+Суб", "Озвучування", "Субтитри"
-        val labelText = this.selectFirst(".short-meta")?.text()?.trim() ?: ""
-        val isDub = labelText.contains("Озв", ignoreCase = true)
-        val isSub = labelText.contains("Суб", ignoreCase = true)
-
+        var isSub = this.select(".box .sub").isNotEmpty()
+        var isDub = this.select(".box .ukr").isNotEmpty()
+        if (!isSub && !isDub) {
+            isSub = true
+            isDub = true
+        }
         return newAnimeSearchResponse(title, href, TvType.Anime) {
-            this.posterUrl = if (posterUrl?.startsWith("/") == true) mainUrl + posterUrl else posterUrl
+            this.posterUrl = mainUrl + posterUrl
             addDubStatus(isDub, isSub)
         }
     }
@@ -98,8 +97,8 @@ class AnitubeinuaProvider : MainAPI() {
                         ))
                         .document
 
-        // Search results also use article.short
-        return document.select("article.short").map { it.toSearchResponse() }
+        // Search results use article.story
+        return document.select("article.story").map { it.toSearchResponse() }
     }
 
     // Detailed information
