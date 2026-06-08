@@ -192,221 +192,76 @@ class AnitubeinuaProvider : MainAPI() {
 
     @Suppress("DEPRECATION")
     override suspend fun loadLinks(
-        data: String,
-        isCasting: Boolean,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ): Boolean {
-        val cleanData = data.removePrefix(mainUrl).removePrefix("/")
-        val dataList = if (cleanData.contains("|||")) cleanData.split("|||") else cleanData.split(", ")
+    data: String,
+    isCasting: Boolean,
+    subtitleCallback: (SubtitleFile) -> Unit,
+    callback: (ExtractorLink) -> Unit
+): Boolean {
+    val dataList = data.split(", ")
+    val epUrl = dataList.getOrNull(0) ?: return false
+    val newsId = dataList.getOrNull(1) ?: return false
+    val isDubbed = dataList.getOrNull(2)?.toBoolean() ?: false
 
-        if (dataList.size < 2) {
-            return false
+    val currentEpisode = extractIntFromString(epUrl) ?: return false
+
+    val response = app.get(
+        "https://anitube.in.ua/engine/ajax/playlists.php?news_id=$newsId&xfield=playlist&user_hash=$dleLoginHash",
+        referer = epUrl
+    ).text
+
+    val playlistData = fromPlaylistAjax(response)
+    val filteredList = playlistData.filter { it.episodeId == currentEpisode && it.urls.isDub == isDubbed }
+
+    val addedLinks = mutableSetOf<String>()
+
+    filteredList.forEach {
+        val player = it.urls.playerName.trim()
+        val audio = it.urls.name.trim()
+
+        // Запобігаємо дублюванню типу озвучки/субтитрів
+        val combinedSource = when {
+            player.contains(audio, ignoreCase = true) -> player
+            audio.contains(player, ignoreCase = true) -> audio
+            else -> "$player ($audio)"
         }
 
-        val addedLinks = hashSetOf<String>()
-
-        if (dataList[1].toIntOrNull() != null) {
-            if (dle_login_hash.isEmpty()) {
-                val animeUrl = "$mainUrl/${dataList[1]}-temp.html"
-                val pageDoc = app.get(animeUrl,
-                    headers = mapOf(
-                        "User-Agent" to USER_AGENT,
-                        "Referer" to mainUrl
-                    )
-                ).document
-
-                dle_login_hash = pageDoc.select("script").firstOrNull { it.html().contains("dle_login_hash") }
-                    ?.html()
-                    ?.substringAfter("dle_login_hash = '")
-                    ?.substringBefore("';") ?: ""
-            }
-
-            val ajaxUrl = "$mainUrl/engine/ajax/playlists.php?news_id=${dataList[1]}&xfield=playlist&user_hash=$dle_login_hash"
-            val ajax = fromPlaylistAjax(ajaxUrl)
-
-            val targetIsDub = dataList.getOrNull(2)?.toBoolean() ?: true
-            val filteredAjax = ajax
-                    ?.filter { it.name == dataList[0] }
-                    ?.filter { it.urls.isDub == targetIsDub }
-
-            filteredAjax?.forEach {
-                with(it) {
-                    when {
-                        it.urls.url.contains("ashdi.vip") -> {
-                            val fixedUrl = if (it.urls.url.startsWith("//")) "https:${it.urls.url}" else it.urls.url
-                            val streamUrl = AshdiExtractor().ParseM3U8(fixedUrl.replace("/embed/", "/vod/"))
-                            M3u8Helper.generateM3u8(
-                                    source = "${it.urls.playerName} (${it.urls.name})",
-                                    streamUrl = streamUrl,
-                                    referer = "https://qeruya.cyou")
-                                    .dropLast(1).forEach { link ->
-                                        val finalName = "${link.name} (${it.urls.name})"
-                                        if (addedLinks.add("${link.url}_$finalName")) {
-                                            callback(ExtractorLink(
-                                                source = link.source,
-                                                name = finalName,
-                                                url = link.url,
-                                                referer = link.referer,
-                                                quality = link.quality,
-                                                type = link.type,
-                                                headers = link.headers,
-                                                extractorData = link.extractorData
-                                            ))
-                                        }
-                                    }
-                        }
-                        it.urls.url.contains("https://www.udrop.com") -> {
-                            val link = ExtractorLink(
-                                source = this.urls.url,
-                                name = "${it.urls.playerName} (${it.urls.name})",
-                                url = this.urls.url,
-                                referer = "",
-                                quality = 0,
-                                type = ExtractorLinkType.M3U8
-                            )
-                            if (addedLinks.add(link.url)) {
-                                callback.invoke(link)
-                            }
-                        }
-                        it.urls.url.contains("https://csst.online/embed/") ||
-                                it.urls.url.contains("https://monstro.site/embed/") -> {
-                            csstExtractor().ParseUrl(it.urls.url).split(",").forEach { csstUrl ->
-                                val link = ExtractorLink(
-                                    source = this.urls.url,
-                                    name = "${it.urls.playerName} (${it.urls.name}) ${csstUrl.substringBefore("]").drop(1)}",
-                                    url = csstUrl.substringAfter("]"),
-                                    referer = "",
-                                    quality = 0,
-                                    type = ExtractorLinkType.M3U8
-                                )
-                                if (addedLinks.add(link.url)) {
-                                    callback.invoke(link)
-                                }
-                            }
-                        }
-                        it.urls.url.contains("https://www.mp4upload.com/") -> {
-                            getExtractorApiFromName("Mp4Upload").getUrl(it.urls.url)?.forEach { extlink ->
-                                val link = ExtractorLink(
-                                        source = extlink.source,
-                                        name = "${it.urls.playerName} (${it.urls.name})",
-                                        url = extlink.url,
-                                        referer = extlink.referer,
-                                        quality = extlink.quality,
-                                        type = extlink.type,
-                                        headers = extlink.headers,
-                                        extractorData = extlink.extractorData
-                                )
-                                if (addedLinks.add(link.url)) {
-                                    callback.invoke(link)
-                                }
-                            }
-                        }
-                    }
+        if (it.urls.url.contains("ashdi.vip")) {
+            val fixedUrl = if (it.urls.url.startsWith("//")) "https:${it.urls.url}" else it.urls.url
+            val streamUrl = AshdiExtractor().ParseM3U8(fixedUrl.replace("/embed/", "/vod/"))
+            
+            M3u8Helper.generateM3u8(
+                source = combinedSource,
+                streamUrl = streamUrl,
+                referer = "https://qeruya.cyou"
+            ).dropLast(1).forEach { link ->
+                // Залишаємо тільки чисту якість (наприклад, "1080p"), бо вся інфа вже є в combinedSource
+                val finalName = link.name 
+                if (addedLinks.add("${link.url}_$finalName")) {
+                    callback(ExtractorLink(
+                        source = link.source,
+                        name = finalName,
+                        url = link.url,
+                        referer = "https://qeruya.cyou",
+                        quality = link.quality,
+                        isM3u8 = true
+                    ))
                 }
             }
         } else {
-            val document = app.get(dataList[1],
-                headers = mapOf(
-                    "User-Agent" to USER_AGENT,
-                    "Referer" to mainUrl
-                )
-            ).document
-            document.select("script").map { script ->
-                if (script.data().contains("RalodePlayer.init(")) {
-                    var latestNumber: Int? = 0
-                    val constructorList = fromVideoContructor(script)
-
-                    constructorList.forEach { dub ->
-                        if (dub.episodeName == "ПЛЕЙЛИСТ") return@forEach
-
-                        if (dub.episodeNumber == null) {
-                            dub.episodeNumber = latestNumber?.plus(1)
-                        }
-
-                        latestNumber = dub.episodeNumber
-                        val targetEpisodeNum = dataList[0].toIntOrNull()
-                        if (latestNumber != targetEpisodeNum) return@forEach
-
-                        with(dub.episodeUrl) {
-                            when {
-                                contains("ashdi.vip") -> {
-                                    val fixedUrl = if (this.startsWith("//")) "https:$this" else this
-                                    val streamUrl = AshdiExtractor().ParseM3U8(fixedUrl.replace("/embed/", "/vod/"))
-                                    M3u8Helper.generateM3u8(
-                                            source = dub.playerName,
-                                            streamUrl = streamUrl,
-                                            referer = "https://qeruya.cyou")
-                                            .dropLast(1).forEach { link ->
-                                                val finalName = "${link.name} (${dub.playerName})"
-                                                if (addedLinks.add("${link.url}_$finalName")) {
-                                                    callback(ExtractorLink(
-                                                        source = link.source,
-                                                        name = finalName,
-                                                        url = link.url,
-                                                        referer = link.referer,
-                                                        quality = link.quality,
-                                                        type = link.type,
-                                                        headers = link.headers,
-                                                        extractorData = link.extractorData
-                                                    ))
-                                                }
-                                            }
-                                }
-                                contains("https://www.udrop.com") -> {
-                                    val link = ExtractorLink(
-                                            source = dub.playerName,
-                                            name = dub.playerName,
-                                            url = this,
-                                            referer = "",
-                                            quality = 0,
-                                            type = ExtractorLinkType.VIDEO
-                                        )
-                                    if (addedLinks.add(link.url)) {
-                                        callback.invoke(link)
-                                    }
-                                }
-                                contains("https://monstro.site/embed/") ||
-                                        contains("https://csst.online/embed/") -> {
-                                    csstExtractor().ParseUrl(this).split(",").forEach {
-                                        val link = ExtractorLink(
-                                            source = dub.playerName,
-                                            name = "${dub.playerName.replace("\"", "")} ${it.substringBefore("]").drop(1)}",
-                                            url = it.substringAfter("]"),
-                                            referer = "",
-                                            quality = 0,
-                                            type = ExtractorLinkType.VIDEO
-                                        )
-                                        if (addedLinks.add(link.url)) {
-                                            callback.invoke(link)
-                                        }
-                                    }
-                                }
-                                contains("https://www.mp4upload.com/") -> {
-                                    getExtractorApiFromName("Mp4Upload").getUrl(this)?.forEach { extlink ->
-                                        val link = ExtractorLink(
-                                            source = extlink.source,
-                                            name = dub.playerName,
-                                            url = extlink.url,
-                                            referer = extlink.referer,
-                                            quality = extlink.quality,
-                                            type = extlink.type,
-                                            headers = extlink.headers,
-                                            extractorData = extlink.extractorData
-                                        )
-                                        if (addedLinks.add(link.url)) {
-                                            callback.invoke(link)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+            // Захист для прямих посилань або інших плеєрів, якщо вони з'являться
+            if (addedLinks.add(it.urls.url)) {
+                callback(ExtractorLink(
+                    source = combinedSource,
+                    name = "Джерело",
+                    url = it.urls.url,
+                    referer = "https://anitube.in.ua/",
+                    quality = Qualities.Unknown.value
+                ))
             }
         }
-        return true
     }
+    return true
+}
 
     private fun decode(input: String): String {
         val hexRegex = Regex("\\\\u([0-9a-fA-F]{4})")
