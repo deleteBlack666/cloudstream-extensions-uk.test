@@ -33,8 +33,7 @@ class AnitubeinuaProvider : MainAPI() {
                     TvType.Anime,
             )
 
-    // Sections
-    // Fix #1: removed "Популярні" section — URL /f/sort=rating/order=desc/page/ no longer exists on the site
+    // FIX #1: прибрано "Популярні" — URL /f/sort=rating/order=desc/page/ більше не існує
     override val mainPage =
             mainPageOf(
                     "$mainUrl/anime/page/" to "Нові",
@@ -54,13 +53,10 @@ class AnitubeinuaProvider : MainAPI() {
             )
         ).document
 
-        // /anime/page/N uses .story cards (different from root page which uses article.short)
         val home = document.select(".story").map { it.toSearchResponse() }
         return newHomePageResponse(request.name, home)
     }
 
-    // Fix #2: updated selectors to match the new site layout
-    // Old: .story_c h2 a / .story_c_l span.story_post img / .box .sub / .box .ukr
     private fun Element.toSearchResponse(): AnimeSearchResponse {
         val title = this.selectFirst(".story_c h2 a, div.text_content a")?.text()?.trim().toString()
         val href = this.selectFirst(".story_c h2 a, div.text_content a")?.attr("href").toString()
@@ -97,11 +93,10 @@ class AnitubeinuaProvider : MainAPI() {
                         ))
                         .document
 
-        // Search results use article.story
         return document.select("article.story").map { it.toSearchResponse() }
     }
 
-    // Detailed information
+    // Detailed information — оригінальні селектори збережено
     override suspend fun load(url: String): AnimeLoadResponse {
         val document = app.get(url,
             headers = mapOf(
@@ -110,35 +105,20 @@ class AnitubeinuaProvider : MainAPI() {
             )
         ).document
 
-        // Fix #2: updated selectors to match the new site layout
-        // Old selectors: .story_c h2, .story_c_left span.story_post img, .story_c_r, div.my-text, .lexington-box
-        // New selectors: .full_title h1, .full_poster img, .full_list-col, .full_desc, (no rating visible)
-        val title = document.selectFirst(".full_title h1")?.text()?.trim().toString()
-        val poster = document.selectFirst(".full_poster img")?.attr("src")?.let {
-            if (it.startsWith("/")) mainUrl + it else it
-        }
+        val someInfo = document.select(".story_c_r")
 
-        val infoList = document.select(".full_list-col li")
-        val tags = infoList
-            .filter { it.text().contains("Жанр", ignoreCase = true) }
-            .flatMap { it.select("a") }
-            .map { it.text() }
-        val year = infoList
-            .filter { it.text().contains("Рік", ignoreCase = true) }
-            .firstOrNull()
-            ?.selectFirst("a")
-            ?.text()
-            ?.toIntOrNull()
+        val title = document.selectFirst(".story_c h2")?.text()?.trim().toString()
+        val poster = mainUrl + document.selectFirst(".story_c_left span.story_post img")?.attr("src")
+        val tags = someInfo.select("a[href*=/anime/]").map { it.text() }
+        val year = someInfo.select("a[href*=/xfsearch/year/]").text().toIntOrNull()
 
         val tvType = TvType.Anime
-        val description = document.selectFirst(".full_desc")?.ownText()?.trim()
+        val description = document.selectFirst("div.my-text")?.text()?.trim()
         val trailer = document.selectFirst(".rcol a.rollover")?.attr("href").toString()
-        // Rating is no longer present in the new layout
-        val rating = null
+        val rating = document.selectFirst(".lexington-box > div:last-child span")?.text()
 
         val recommendations = document.select(".horizontal ul li").map { it.toSearchResponse() }
 
-        // Players, Episodes, Number of episodes
         val subEpisodes = mutableListOf<Episode>()
         val dubEpisodes = mutableListOf<Episode>()
         val id = url.split("/").last().split("-").first()
@@ -154,12 +134,11 @@ class AnitubeinuaProvider : MainAPI() {
                 fromPlaylistAjax(
                         "$mainUrl/engine/ajax/playlists.php?news_id=$id&xfield=playlist&user_hash=$dle_login_hash", referer = url)
 
-        if (!ajax.isNullOrEmpty()) { // Ajax list
+        if (!ajax.isNullOrEmpty()) {
             ajax
                     .groupBy { it.name }
-                    .forEach { episodes -> // Group by name
+                    .forEach { episodes ->
                         episodes.value.forEach lit@{
-                            // UFDub player, drop
                             if (it.urls.url.contains("video.ufdub")) return@lit
 
                             if (it.urls.isDub) {
@@ -207,7 +186,7 @@ class AnitubeinuaProvider : MainAPI() {
             this.year = year
             this.plot = description
             this.tags = tags
-            this.score = Score.from10(rating as String?)
+            this.score = Score.from10(rating)
             addTrailer(trailer)
             this.recommendations = recommendations
             addEpisodes(DubStatus.Dubbed, dubEpisodes)
@@ -215,16 +194,15 @@ class AnitubeinuaProvider : MainAPI() {
         }
     }
 
-    // It works when I click to view the series
     override suspend fun loadLinks(
-            data: String, // (Ajax) Name, id title, isDub | (Two) Episode name, url title
+            data: String,
             isCasting: Boolean,
             subtitleCallback: (SubtitleFile) -> Unit,
             callback: (ExtractorLink) -> Unit
     ): Boolean {
         val dataList = data.split(", ")
         Log.d("CakesTwix-Debug", data)
-        if (dataList[1].toIntOrNull() != null) { // Its ajax list
+        if (dataList[1].toIntOrNull() != null) {
             if (dle_login_hash.isEmpty()) {
                 val animeUrl = "$mainUrl/${dataList[1]}-temp.html"
                 val pageDoc = app.get(animeUrl,
@@ -247,14 +225,13 @@ class AnitubeinuaProvider : MainAPI() {
                     fromPlaylistAjax(
                             "$mainUrl/engine/ajax/playlists.php?news_id=${dataList[1]}&xfield=playlist&user_hash=$dle_login_hash")
 
-            // Filter by name and isDub
             ajax
                     ?.filter { it.name == dataList[0] }
                     ?.filter { it.urls.isDub == dataList[2].toBoolean() }
                     ?.forEach {
                         with(it) {
                             when {
-                                // Fix #2: ashdi.vip handler — kept as-is, still a valid extractor
+                                // FIX #3: tortuga видалено
                                 it.urls.url.contains("https://ashdi.vip/vod") -> {
                                     M3u8Helper.generateM3u8(
                                             source = "${it.urls.playerName} (${it.urls.name})",
@@ -322,7 +299,7 @@ class AnitubeinuaProvider : MainAPI() {
 
                         with(dub.episodeUrl) {
                             when {
-                                // Fix #2: ashdi.vip handler — kept as-is
+                                // FIX #3: tortuga видалено
                                 contains("https://ashdi.vip/vod") -> {
                                     M3u8Helper.generateM3u8(
                                             source = dub.playerName,
@@ -382,6 +359,7 @@ class AnitubeinuaProvider : MainAPI() {
 
     data class Responses(val success: Boolean?, val response: String?, val message: String?)
 
+    // FIX #2: виправлено визначення isDub та listPlayers
     private suspend fun fromPlaylistAjax(url: String, referer: String = "https://anitube.in.ua/"): List<Ajax>? {
         val responseGet = app.get(
             url,
@@ -400,13 +378,13 @@ class AnitubeinuaProvider : MainAPI() {
 
         val playlist = Jsoup.parse(responseGet?.response!!)
 
-        // List 0: ОЗВУЧЕННЯ / СУБТИТРИ  — determines isDub
-        // List 1: studio name (e.g. "Робота Голосом") — ignored, was wrongly used as dub/sub before
-        // List 2: player names (ПЛЕЄР ASHDI / ПЛЕЄР MOON) — always the last playlists-items
+        // List 0: ОЗВУЧЕННЯ / СУБТИТРИ  — визначає isDub
+        // List 1: студія (напр. "Робота Голосом") — ігнорується
+        // List 2: плеєри (ПЛЕЄР ASHDI / ПЛЕЄР MOON) — завжди останній список
         val allLists = playlist.select(".playlists-lists .playlists-items")
 
-        val audios = mutableListOf<Pair<String, String>>()   // (name, data-id prefix)
-        val listPlayers = mutableListOf<Pair<String, String>>() // (name, data-id prefix)
+        val audios = mutableListOf<Pair<String, String>>()
+        val listPlayers = mutableListOf<Pair<String, String>>()
 
         allLists.firstOrNull()?.select("li")?.forEach {
             audios.add(Pair(it.text(), it.attr("data-id")))
@@ -420,15 +398,14 @@ class AnitubeinuaProvider : MainAPI() {
             val episodeId = extractIntFromString(element.text())
             val url = element.attr("data-file")
 
-            // Skip moonanime.art — not supported
+            // moonanime.art не підтримується
             if (url.contains("moonanime.art")) return@forEach
 
             var isDub = true
             var audio: String? = null
             var playerName = ""
 
-            // isDub is derived directly from the audios list:
-            // "ОЗВУЧЕННЯ" -> isDub=true, "СУБТИТРИ" -> isDub=false
+            // isDub береться з audios: "ОЗВУЧЕННЯ" -> true, "СУБТИТРИ" -> false
             audios.forEach {
                 if (audioId.startsWith(it.second)) {
                     audio = it.first
