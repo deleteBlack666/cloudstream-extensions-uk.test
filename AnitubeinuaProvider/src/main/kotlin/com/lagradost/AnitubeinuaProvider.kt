@@ -1,4 +1,4 @@
-package com.lagradost
+Package com.lagradost
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
@@ -118,10 +118,13 @@ class AnitubeinuaProvider : MainAPI() {
         val dubEpisodes = mutableListOf<Episode>()
         val id = url.split("/").last().split("-").first()
         
-        dle_login_hash = document.select("script").firstOrNull { it.html().contains("dle_login_hash") }
-            ?.html()
-            ?.substringAfter("dle_login_hash = '")
-            ?.substringBefore("';") ?: ""
+        dle_login_hash =
+                document
+                        .body()
+                        .selectFirst("script")!!
+                        .html()
+                        .substringAfterLast("dle_login_hash = '")
+                        .substringBefore("';")
 
         val ajax =
                 fromPlaylistAjax(
@@ -138,7 +141,7 @@ class AnitubeinuaProvider : MainAPI() {
 
                 if (hasDub) {
                     dubEpisodes.add(
-                        newEpisode("$epName|||$id|||true") {
+                        newEpisode("$epName, $id, true") {
                             this.name = epName
                             this.episode = numberEpisode
                         }
@@ -146,7 +149,7 @@ class AnitubeinuaProvider : MainAPI() {
                 }
                 if (hasSub) {
                     subEpisodes.add(
-                        newEpisode("$epName|||$id|||false") {
+                        newEpisode("$epName, $id, false") {
                             this.name = epName
                             this.episode = numberEpisode
                         }
@@ -167,10 +170,10 @@ class AnitubeinuaProvider : MainAPI() {
                             val varEpisodeNumber = firstEp.episodeNumber ?: (episodesList.lastOrNull()?.episodeNumber?.plus(1))
 
                             dubEpisodes.add(
-                                newEpisode("$varEpisodeNumber|||$url") {
+                                newEpisode("$varEpisodeNumber, $url") {
                                     this.name = epName
                                     this.episode = firstEp.episodeNumber
-                                    this.data = "$varEpisodeNumber|||$url"
+                                    this.data = "$varEpisodeNumber, $url"
                                 }
                             )
                         }
@@ -197,14 +200,14 @@ class AnitubeinuaProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // Очищення будь-якого автоматичного доменного префікса, доданого ядром Cloudstream
-        val cleanData = data.replace(Regex("^https?://[^/]+/"), "")
-        val dataList = cleanData.split("|||")
+        val cleanData = data.removePrefix(mainUrl).removePrefix("/")
+        val dataList = if (cleanData.contains("|||")) cleanData.split("|||") else cleanData.split(", ")
 
         if (dataList.size < 2) {
             return false
         }
 
+        // Хеш-сет для запобігання дублюванню однакових стримінг-посилань (якостей)
         val addedLinks = hashSetOf<String>()
 
         if (dataList[1].toIntOrNull() != null) {
@@ -217,10 +220,13 @@ class AnitubeinuaProvider : MainAPI() {
                     )
                 ).document
 
-                dle_login_hash = pageDoc.select("script").firstOrNull { it.html().contains("dle_login_hash") }
+                dle_login_hash = pageDoc
+                    .body()
+                    .selectFirst("script")
                     ?.html()
-                    ?.substringAfter("dle_login_hash = '")
-                    ?.substringBefore("';") ?: ""
+                    ?.substringAfterLast("dle_login_hash = '")
+                    ?.substringBefore("';")
+                    ?: ""
             }
 
             val ajaxUrl = "$mainUrl/engine/ajax/playlists.php?news_id=${dataList[1]}&xfield=playlist&user_hash=$dle_login_hash"
@@ -246,22 +252,6 @@ class AnitubeinuaProvider : MainAPI() {
                                             callback(link)
                                         }
                                     }
-                        }
-                        it.urls.url.contains("moonanime.art") -> {
-                            val iframeUrl = if (it.urls.url.startsWith("//")) "https:${it.urls.url}" else it.urls.url
-                            val pageContent = app.get(iframeUrl, headers = mapOf("User-Agent" to USER_AGENT, "Referer" to mainUrl)).text
-                            val m3u8Url = Regex("""https?://[^\s"'<>]+?\.m3u8""").find(pageContent)?.value
-                            if (m3u8Url != null) {
-                                M3u8Helper.generateM3u8(
-                                    source = "${it.urls.playerName} (${it.urls.name})",
-                                    streamUrl = m3u8Url,
-                                    referer = iframeUrl
-                                ).forEach { link ->
-                                    if (addedLinks.add(link.url)) {
-                                        callback(link)
-                                    }
-                                }
-                            }
                         }
                         it.urls.url.contains("https://www.udrop.com") -> {
                             val link = newExtractorLink(
@@ -340,22 +330,6 @@ class AnitubeinuaProvider : MainAPI() {
                                                     callback(link)
                                                 }
                                             }
-                                }
-                                contains("moonanime.art") -> {
-                                    val iframeUrl = if (this.startsWith("//")) "https:$this" else this
-                                    val pageContent = app.get(iframeUrl, headers = mapOf("User-Agent" to USER_AGENT, "Referer" to mainUrl)).text
-                                    val m3u8Url = Regex("""https?://[^\s"'<>]+?\.m3u8""").find(pageContent)?.value
-                                    if (m3u8Url != null) {
-                                        M3u8Helper.generateM3u8(
-                                            source = dub.playerName,
-                                            streamUrl = m3u8Url,
-                                            referer = iframeUrl
-                                        ).forEach { link ->
-                                            if (addedLinks.add(link.url)) {
-                                                callback(link)
-                                            }
-                                        }
-                                    }
                                 }
                                 contains("https://www.udrop.com") -> {
                                     val link = newExtractorLink(
@@ -443,6 +417,8 @@ class AnitubeinuaProvider : MainAPI() {
             val audioId = element.attr("data-id")
             val episodeId = extractIntFromString(element.text())
             val url = element.attr("data-file")
+
+            if (url.contains("moonanime.art")) return@forEach
 
             var isDub = true
             var audio: String? = null
