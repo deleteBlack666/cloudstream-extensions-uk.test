@@ -19,9 +19,7 @@ import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 
 class AnitubeinuaProvider : MainAPI() {
-
-    private val TAG = "Anitubeinua"
-    
+private val TAG = "Anitubeinua"
     // Basic Info
     override var mainUrl = "https://anitube.in.ua"
     override var name = "Anitubeinua"
@@ -216,8 +214,16 @@ class AnitubeinuaProvider : MainAPI() {
         Log.d(TAG, "==== START LOAD LINKS ====")
         Log.d(TAG, "Вхідні дані (data): $data")
         
+        // Очищення від автоматичного префіксу сайту, який наосліп дописує Cloudstream
+        val cleanData = if (data.startsWith(mainUrl)) {
+            data.removePrefix(mainUrl).removePrefix("/")
+        } else {
+            data
+        }
+        Log.d(TAG, "Очищені дані для обробки: $cleanData")
+
         // Універсальний спліттер для підтримки різних форматів даних ("|||" або ", ")
-        val dataList = if (data.contains("|||")) data.split("|||") else data.split(", ")
+        val dataList = if (cleanData.contains("|||")) cleanData.split("|||") else cleanData.split(", ")
         Log.d(TAG, "Розбитий dataList: $dataList (Елементів: ${dataList.size})")
 
         if (dataList.size < 2) {
