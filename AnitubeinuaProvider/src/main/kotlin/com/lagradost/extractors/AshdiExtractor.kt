@@ -4,7 +4,7 @@ import com.lagradost.cloudstream3.app
 
 class AshdiExtractor {
     suspend fun ParseM3U8(url: String, referer: String = "https://anitube.in.ua/"): String {
-        // Додаємо заголовки, щоб уникнути блокування з боку сервера (403 / protection)
+        // Виконуємо запит із заголовками для обходу захисту плеєра
         val html = app.get(
             url,
             headers = mapOf(
@@ -13,10 +13,10 @@ class AshdiExtractor {
             )
         ).text
 
-        // Регулярний вираз шукає 'file' незалежно від пробілів та типу лапок (одинарні чи подвійні)
+        // Надійний пошук m3u8 за допомогою регулярного виразу
         val regex = """file\s*:\s*['"](https?://[^'"]+\.m3u8.*?)['"]""".toRegex()
         
         return regex.find(html)?.groupValues?.get(1) 
-            ?: throw Exception("Не вдалося знайти m3u8 посилання в плеєрі Ashdi")
+            ?: throw Exception("Не вдалося витягнути посилання (.m3u8) з плеєра Ashdi")
     }
 }
