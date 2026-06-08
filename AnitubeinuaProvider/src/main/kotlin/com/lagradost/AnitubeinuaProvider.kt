@@ -118,13 +118,11 @@ class AnitubeinuaProvider : MainAPI() {
         val dubEpisodes = mutableListOf<Episode>()
         val id = url.split("/").last().split("-").first()
         
-        dle_login_hash =
-                document
-                        .body()
-                        .selectFirst("script")!!
-                        .html()
-                        .substringAfterLast("dle_login_hash = '")
-                        .substringBefore("';")
+        // Безпечний пошук саме того тегу script, який містить необхідний хеш користувача
+        dle_login_hash = document.select("script").firstOrNull { it.html().contains("dle_login_hash") }
+            ?.html()
+            ?.substringAfter("dle_login_hash = '")
+            ?.substringBefore("';") ?: ""
 
         val ajax =
                 fromPlaylistAjax(
@@ -207,7 +205,6 @@ class AnitubeinuaProvider : MainAPI() {
             return false
         }
 
-        // Хеш-сет для запобігання дублюванню однакових стримінг-посилань (якостей)
         val addedLinks = hashSetOf<String>()
 
         if (dataList[1].toIntOrNull() != null) {
@@ -220,13 +217,10 @@ class AnitubeinuaProvider : MainAPI() {
                     )
                 ).document
 
-                dle_login_hash = pageDoc
-                    .body()
-                    .selectFirst("script")
+                dle_login_hash = pageDoc.select("script").firstOrNull { it.html().contains("dle_login_hash") }
                     ?.html()
-                    ?.substringAfterLast("dle_login_hash = '")
-                    ?.substringBefore("';")
-                    ?: ""
+                    ?.substringAfter("dle_login_hash = '")
+                    ?.substringBefore("';") ?: ""
             }
 
             val ajaxUrl = "$mainUrl/engine/ajax/playlists.php?news_id=${dataList[1]}&xfield=playlist&user_hash=$dle_login_hash"
@@ -248,8 +242,19 @@ class AnitubeinuaProvider : MainAPI() {
                                     streamUrl = streamUrl,
                                     referer = "https://qeruya.cyou")
                                     .dropLast(1).forEach { link ->
-                                        if (addedLinks.add(link.url)) {
-                                            callback(link)
+                                        // Додаємо назву озвучення / субтитрів до імені посилання
+                                        val finalName = "${link.name} (${it.urls.name})"
+                                        if (addedLinks.add("${link.url}_$finalName")) {
+                                            callback(ExtractorLink(
+                                                link.source,
+                                                finalName,
+                                                link.url,
+                                                link.referer,
+                                                link.quality,
+                                                link.type,
+                                                link.headers,
+                                                link.extractorData
+                                            ))
                                         }
                                     }
                         }
@@ -326,8 +331,19 @@ class AnitubeinuaProvider : MainAPI() {
                                             streamUrl = streamUrl,
                                             referer = "https://qeruya.cyou")
                                             .dropLast(1).forEach { link ->
-                                                if (addedLinks.add(link.url)) {
-                                                    callback(link)
+                                                // Додаємо назву плеєра / типу до імені посилання у RalodePlayer
+                                                val finalName = "${link.name} (${dub.playerName})"
+                                                if (addedLinks.add("${link.url}_$finalName")) {
+                                                    callback(ExtractorLink(
+                                                        link.source,
+                                                        finalName,
+                                                        link.url,
+                                                        link.referer,
+                                                        link.quality,
+                                                        link.type,
+                                                        link.headers,
+                                                        link.extractorData
+                                                    ))
                                                 }
                                             }
                                 }
