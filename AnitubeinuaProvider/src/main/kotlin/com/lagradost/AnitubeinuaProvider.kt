@@ -35,9 +35,10 @@ class AnitubeinuaProvider : MainAPI() {
 
     // Sections
     // Fix #1: removed "Популярні" section — URL /f/sort=rating/order=desc/page/ no longer exists on the site
+    // Root page paginates via /page/N/, not /anime/page/N/
     override val mainPage =
             mainPageOf(
-                    "$mainUrl/anime/page/" to "Нові",
+                    "$mainUrl/page/" to "Нові",
             )
 
     private var dle_login_hash = ""
