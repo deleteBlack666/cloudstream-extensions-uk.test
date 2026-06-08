@@ -147,18 +147,23 @@ class AnitubeinuaProvider : MainAPI() {
                         episodes.value.forEach lit@{
                             if (it.urls.url.contains("video.ufdub")) return@lit
 
+                            // Використовуємо безпечний роздільник ||| і обов'язково ініціалізуємо this.data
+                            val episodeDataStr = "${it.name}|||$id|||${it.urls.isDub}"
+
                             if (it.urls.isDub) {
                                 dubEpisodes.add(
-                                    newEpisode("${it.name}, $id, ${it.urls.isDub}") {
+                                    newEpisode(episodeDataStr) {
                                         this.name = it.name
                                         this.episode = it.numberEpisode
+                                        this.data = episodeDataStr
                                     }
                                 )
                             } else {
                                 subEpisodes.add(
-                                    newEpisode("${it.name}, $id, ${it.urls.isDub}") {
+                                    newEpisode(episodeDataStr) {
                                         this.name = it.name
                                         this.episode = it.numberEpisode
+                                        this.data = episodeDataStr
                                     }
                                 )
                             }
@@ -178,11 +183,13 @@ class AnitubeinuaProvider : MainAPI() {
                         if (varEpisodeNumber == null) {
                             varEpisodeNumber = episodesList.last().episodeNumber?.plus(1)
                         }
+                        
+                        val episodeDataStr = "$varEpisodeNumber|||$url"
                         dubEpisodes.add(
-                            newEpisode("$varEpisodeNumber, $url") {
+                            newEpisode(episodeDataStr) {
                                 this.name = episode.episodeName
                                 this.episode = episode.episodeNumber
-                                this.data = "$varEpisodeNumber, $url"
+                                this.data = episodeDataStr
                             }
                         )
                     }
@@ -215,211 +222,210 @@ class AnitubeinuaProvider : MainAPI() {
         Log.d(TAG, "==== START LOAD LINKS ====")
         Log.d(TAG, "Вхідні дані (data): $data")
         
-        val dataList = data.split(", ")
-        Log.d(TAG, "Розбитий dataList: $dataList (Елементів: ${dataList.size})")
-        
-        if (dataList.size < 2) {
-            Log.e(TAG, "Недостатньо елементів у dataList для обробки посилань!")
-            return false
-        }
-
-        if (dataList[1].toIntOrNull() != null) { // Ajax список
-            Log.d(TAG, "Гілка: Плейлист через AJAX (dataList[1] є ID новини: ${dataList[1]})")
+        // Огортаємо весь метод у блок безпеки, щоб ловити будь-які помилки
+        try {
+            val dataList = data.split("|||")
+            Log.d(TAG, "Розбитий dataList: $dataList (Елементів: ${dataList.size})")
             
-            if (dle_login_hash.isEmpty()) {
-                val animeUrl = "$mainUrl/${dataList[1]}-temp.html"
-                Log.d(TAG, "dle_login_hash порожній, робимо запит до тимчасової сторінки: $animeUrl")
-                val pageDoc = app.get(animeUrl,
+            if (dataList.size < 2) {
+                Log.e(TAG, "Недостатньо елементів у dataList для обробки посилань! Перевірте формат даних.")
+                return false
+            }
+
+            val isAjaxList = dataList.getOrNull(1)?.toIntOrNull() != null
+
+            if (isAjaxList) { // Ajax список
+                val newsId = dataList[1]
+                Log.d(TAG, "Гілка: Плейлист через AJAX (ID новини: $newsId)")
+                
+                if (dle_login_hash.isEmpty()) {
+                    val animeUrl = "$mainUrl/$newsId-temp.html"
+                    Log.d(TAG, "dle_login_hash порожній, робимо запит до сторінки: $animeUrl")
+                    val pageDoc = app.get(animeUrl,
+                        headers = mapOf(
+                            "User-Agent" to USER_AGENT,
+                            "Referer" to mainUrl
+                        )
+                    ).document
+                    
+                    dle_login_hash = pageDoc
+                        .body()
+                        .selectFirst("script")
+                        ?.html()
+                        ?.substringAfterLast("dle_login_hash = '")
+                        ?.substringBefore("';")
+                        ?: ""
+                    Log.d(TAG, "Отримано новий dle_login_hash: $dle_login_hash")
+                }
+                
+                val ajaxUrl = "$mainUrl/engine/ajax/playlists.php?news_id=$newsId&xfield=playlist&user_hash=$dle_login_hash"
+                Log.d(TAG, "Запит плейлиста за адресою: $ajaxUrl")
+                val ajax = fromPlaylistAjax(ajaxUrl)
+                
+                val targetName = dataList[0]
+                val targetDub = dataList.getOrNull(2)?.toBoolean() ?: true
+                Log.d(TAG, "Фільтрація AJAX -> Шукаємо назву серії: '$targetName' | Озвучка (isDub): $targetDub")
+
+                val filteredAjax = ajax
+                        ?.filter { it.name == targetName }
+                        ?.filter { it.urls.isDub == targetDub }
+
+                Log.d(TAG, "Знайдено елементів після фільтрації: ${filteredAjax?.size ?: 0}")
+
+                filteredAjax?.forEach {
+                    with(it) {
+                        Log.d(TAG, "Обробка посилання плеєра: ${it.urls.playerName} (${it.urls.name}) -> ${it.urls.url}")
+                        when {
+                            it.urls.url.contains("ashdi") -> {
+                                Log.d(TAG, "Запуск AshdiExtractor для гілки AJAX...")
+                                try {
+                                    val extractedM3u8 = AshdiExtractor().ParseM3U8(this.urls.url, referer = "https://qeruya.cyou")
+                                    Log.d(TAG, "AshdiExtractor успішно повернув: $extractedM3u8")
+                                    
+                                    M3u8Helper.generateM3u8(
+                                            source = "${it.urls.playerName} (${it.urls.name})",
+                                            streamUrl = extractedM3u8,
+                                            referer = "https://qeruya.cyou")
+                                            .dropLast(1).forEach { link ->
+                                                Log.d(TAG, "Додано посилання m3u8 у плеєр: ${link.url}")
+                                                callback(link)
+                                            }
+                                } catch (e: Exception) {
+                                    Log.e(TAG, "Помилка екстракції всередині Ashdi у гілці AJAX", e)
+                                }
+                            }
+                            it.urls.url.contains("https://www.udrop.com") -> {
+                                callback.invoke(
+                                    newExtractorLink(
+                                        this.urls.url,
+                                        "${it.urls.playerName} (${it.urls.name})",
+                                        this.urls.url,
+                                        ExtractorLinkType.M3U8
+                                    )
+                                )
+                            }
+                            it.urls.url.contains("https://csst.online/embed/") ||
+                                    it.urls.url.contains("https://monstro.site/embed/") -> {
+                                csstExtractor().ParseUrl(it.urls.url).split(",").forEach { csstUrl ->
+                                    callback.invoke(
+                                        newExtractorLink(
+                                            this.urls.url,
+                                            "${it.urls.playerName} (${it.urls.name}) ${csstUrl.substringBefore("]").drop(1)}",
+                                            csstUrl.substringAfter("]"),
+                                            ExtractorLinkType.M3U8
+                                        )
+                                    )
+                                }
+                            }
+                            it.urls.url.contains("https://www.mp4upload.com/") -> {
+                                getExtractorApiFromName("Mp4Upload").getUrl(it.urls.url)?.forEach { extlink ->
+                                    callback.invoke(
+                                        newExtractorLink(
+                                                extlink.source,
+                                                "${it.urls.playerName} (${it.urls.name})",
+                                                extlink.url,
+                                        )
+                                    )
+                                }
+                            }
+                            else -> {
+                                Log.w(TAG, "Невідомий тип плеєра для URL: ${it.urls.url}")
+                            }
+                        }
+                    }
+                }
+            } else { // Прямий плеєр зі сторінки (RalodePlayer)
+                val pageUrl = dataList[1]
+                Log.d(TAG, "Гілка: RalodePlayer (Прямий плеєр). URL сторінки: $pageUrl")
+                val document = app.get(pageUrl,
                     headers = mapOf(
                         "User-Agent" to USER_AGENT,
                         "Referer" to mainUrl
                     )
                 ).document
                 
-                dle_login_hash = pageDoc
-                    .body()
-                    .selectFirst("script")
-                    ?.html()
-                    ?.substringAfterLast("dle_login_hash = '")
-                    ?.substringBefore("';")
-                    ?: ""
-                Log.d(TAG, "Отримано новий dle_login_hash: $dle_login_hash")
-            }
-            
-            val ajaxUrl = "$mainUrl/engine/ajax/playlists.php?news_id=${dataList[1]}&xfield=playlist&user_hash=$dle_login_hash"
-            Log.d(TAG, "Запит плейлиста для loadLinks за адресою: $ajaxUrl")
-            val ajax = fromPlaylistAjax(ajaxUrl)
-            
-            Log.d(TAG, "Всього елементів в AJAX перед фільтрацією: ${ajax?.size ?: 0}")
+                document.select("script").map { script ->
+                    if (script.data().contains("RalodePlayer.init(")) {
+                        var latestNumber: Int? = 0
+                        val constructors = fromVideoContructor(script)
+                        Log.d(TAG, "Знайдено відео-конструкторів у Ralode: ${constructors.size}")
 
-            ajax?.forEach { 
-                Log.d(TAG, "Елемент плейлиста -> Назва: '${it.name}', isDub: ${it.urls.isDub}, URL: ${it.urls.url}")
-            }
+                        constructors.forEach { dub ->
+                            if (dub.episodeName == "ПЛЕЙЛИСТ") return@forEach
 
-            val targetName = dataList[0]
-            val targetDub = dataList[2].toBoolean()
-            Log.d(TAG, "Фільтрація за критеріями -> Шукаємо назву серії: '$targetName' та озвучку (isDub): $targetDub")
-
-            val filteredAjax = ajax
-                    ?.filter { it.name == targetName }
-                    ?.filter { it.urls.isDub == targetDub }
-
-            Log.d(TAG, "Кількість елементів після фільтрації: ${filteredAjax?.size ?: 0}")
-
-            filteredAjax?.forEach {
-                        with(it) {
-                            Log.d(TAG, "Обробка посилання від плеєра: ${it.urls.playerName} (${it.urls.name}) | URL: ${it.urls.url}")
-                            when {
-                                it.urls.url.contains("ashdi") -> {
-                                    Log.d(TAG, "Знайдено Ashdi у списку Ajax. Запуск AshdiExtractor...")
-                                    try {
-                                        val extractedM3u8 = AshdiExtractor().ParseM3U8(this.urls.url, referer = "https://qeruya.cyou")
-                                        Log.d(TAG, "AshdiExtractor успішно повернув посилання: $extractedM3u8")
-                                        
-                                        M3u8Helper.generateM3u8(
-                                                source = "${it.urls.playerName} (${it.urls.name})",
-                                                streamUrl = extractedM3u8,
-                                                referer = "https://qeruya.cyou")
-                                                .dropLast(1).forEach { link ->
-                                                    Log.d(TAG, "Додано згенероване посилання m3u8: ${link.url}")
-                                                    callback(link)
-                                                }
-                                    } catch (e: Exception) {
-                                        Log.e(TAG, "Помилка екстракції Ashdi у гілці AJAX", e)
-                                    }
-                                }
-                                it.urls.url.contains("https://www.udrop.com") -> {
-                                    Log.d(TAG, "Обробка udrop: ${this.urls.url}")
-                                    callback.invoke(
-                                        newExtractorLink(
-                                            this.urls.url,
-                                            "${it.urls.playerName} (${it.urls.name})",
-                                            this.urls.url,
-                                            ExtractorLinkType.M3U8
-                                        )
-                                    )
-                                }
-                                it.urls.url.contains("https://csst.online/embed/") ||
-                                        it.urls.url.contains("https://monstro.site/embed/") -> {
-                                    Log.d(TAG, "Обробка csst/monstro: ${this.urls.url}")
-                                    csstExtractor().ParseUrl(it.urls.url).split(",").forEach { csstUrl ->
-                                        callback.invoke(
-                                            newExtractorLink(
-                                                this.urls.url,
-                                                "${it.urls.playerName} (${it.urls.name}) ${csstUrl.substringBefore("]").drop(1)}",
-                                                csstUrl.substringAfter("]"),
-                                                ExtractorLinkType.M3U8
-                                            )
-                                        )
-                                    }
-                                }
-                                it.urls.url.contains("https://www.mp4upload.com/") -> {
-                                    Log.d(TAG, "Обробка Mp4Upload: ${this.urls.url}")
-                                    getExtractorApiFromName("Mp4Upload").getUrl(it.urls.url)?.forEach { extlink ->
-                                        callback.invoke(
-                                            newExtractorLink(
-                                                    extlink.source,
-                                                    "${it.urls.playerName} (${it.urls.name})",
-                                                    extlink.url,
-                                            )
-                                        )
-                                    }
-                                }
-                                else -> {
-                                    Log.w(TAG, "Невідомий або непідтримуваний тип плеєра для URL: ${it.urls.url}")
-                                }
+                            if (dub.episodeNumber == null) {
+                                dub.episodeNumber = latestNumber?.plus(1)
                             }
-                        }
-                    }
-        } else { // Прямий плеєр зі сторінки (RalodePlayer)
-            Log.d(TAG, "Гілка: RalodePlayer (Прямий плеєр на сторінці). URL сторінки: ${dataList[1]}")
-            val document = app.get(dataList[1],
-                headers = mapOf(
-                    "User-Agent" to USER_AGENT,
-                    "Referer" to mainUrl
-                )
-            ).document
-            
-            document.select("script").map { script ->
-                if (script.data().contains("RalodePlayer.init(")) {
-                    Log.d(TAG, "Знайдено RalodePlayer.init всередині loadLinks")
-                    var latestNumber: Int? = 0
-                    val constructors = fromVideoContructor(script)
-                    Log.d(TAG, "Усього конструкторів відео знайдено: ${constructors.size}")
 
-                    constructors.forEach { dub ->
-                        if (dub.episodeName == "ПЛЕЙЛИСТ") return@forEach
+                            latestNumber = dub.episodeNumber
+                            
+                            if (latestNumber != dataList[0].toIntOrNull()) return@forEach
 
-                        if (dub.episodeNumber == null) {
-                            dub.episodeNumber = latestNumber?.plus(1)
-                        }
+                            Log.d(TAG, "Збіг серії у Ralode знайдено! Плеєр: ${dub.playerName}, URL: ${dub.episodeUrl}")
 
-                        latestNumber = dub.episodeNumber
-                        Log.d(TAG, "Ralode серія -> Поточний номер: $latestNumber | Очікуваний номер: ${dataList[0]}")
-                        
-                        if (latestNumber != dataList[0].toIntOrNull()) return@forEach
-
-                        Log.d(TAG, "Збіг серії знайдено у Ralode! Назва плеєра: ${dub.playerName}, URL: ${dub.episodeUrl}")
-
-                        with(dub.episodeUrl) {
-                            when {
-                                contains("ashdi") -> {
-                                    Log.d(TAG, "Знайдено Ashdi у Ralode. Запуск AshdiExtractor...")
-                                    try {
-                                        val extractedM3u8 = AshdiExtractor().ParseM3U8(this, referer = "https://qeruya.cyou")
-                                        Log.d(TAG, "AshdiExtractor успішно повернув посилання (Ralode): $extractedM3u8")
-                                        
-                                        M3u8Helper.generateM3u8(
-                                                source = dub.playerName,
-                                                streamUrl = extractedM3u8,
-                                                referer = "https://qeruya.cyou")
-                                                .dropLast(1).forEach(callback)
-                                    } catch (e: Exception) {
-                                        Log.e(TAG, "Помилка екстракції Ashdi у гілці RalodePlayer", e)
+                            with(dub.episodeUrl) {
+                                when {
+                                    contains("ashdi") -> {
+                                        Log.d(TAG, "Запуск AshdiExtractor для гілки Ralode...")
+                                        try {
+                                            val extractedM3u8 = AshdiExtractor().ParseM3U8(this, referer = "https://qeruya.cyou")
+                                            Log.d(TAG, "AshdiExtractor успішно повернув (Ralode): $extractedM3u8")
+                                            
+                                            M3u8Helper.generateM3u8(
+                                                    source = dub.playerName,
+                                                    streamUrl = extractedM3u8,
+                                                    referer = "https://qeruya.cyou")
+                                                    .dropLast(1).forEach(callback)
+                                        } catch (e: Exception) {
+                                            Log.e(TAG, "Помилка екстракції всередині Ashdi у гілці Ralode", e)
+                                        }
                                     }
-                                }
-                                contains("https://www.udrop.com") -> {
-                                    callback.invoke(
-                                        newExtractorLink(
-                                                dub.playerName,
-                                                name = dub.playerName,
-                                                this,
-                                            )
-                                    )
-                                }
-                                contains("https://monstro.site/embed/") ||
-                                        contains("https://csst.online/embed/") -> {
-                                    csstExtractor().ParseUrl(this).split(",").forEach {
+                                    contains("https://www.udrop.com") -> {
                                         callback.invoke(
                                             newExtractorLink(
-                                                dub.playerName,
-                                                name =
-                                                "${dub.playerName.replace("\"", "")} ${it.substringBefore("]").drop(1)}",
-                                                it.substringAfter("]"),
-                                            )
+                                                    dub.playerName,
+                                                    name = dub.playerName,
+                                                    this,
+                                                )
                                         )
                                     }
-                                }
-                                contains("https://www.mp4upload.com/") -> {
-                                    getExtractorApiFromName("Mp4Upload").getUrl(this)?.forEach { extlink ->
-                                        callback.invoke(
-                                            newExtractorLink(
-                                                extlink.source,
-                                                dub.playerName,
-                                                extlink.url,
+                                    contains("https://monstro.site/embed/") ||
+                                            contains("https://csst.online/embed/") -> {
+                                        csstExtractor().ParseUrl(this).split(",").forEach {
+                                            callback.invoke(
+                                                newExtractorLink(
+                                                    dub.playerName,
+                                                    name =
+                                                    "${dub.playerName.replace("\"", "")} ${it.substringBefore("]").drop(1)}",
+                                                    it.substringAfter("]"),
+                                                )
                                             )
-                                        )
+                                        }
                                     }
-                                }
-                                else -> {
-                                    Log.w(TAG, "Невідомий тип плеєра у Ralode для URL: $this")
+                                    contains("https://www.mp4upload.com/") -> {
+                                        getExtractorApiFromName("Mp4Upload").getUrl(this)?.forEach { extlink ->
+                                            callback.invoke(
+                                                newExtractorLink(
+                                                    extlink.source,
+                                                    dub.playerName,
+                                                    extlink.url,
+                                                )
+                                            )
+                                        }
+                                    }
+                                    else -> {
+                                        Log.w(TAG, "Невідомий тип плеєра у Ralode для URL: $this")
+                                    }
                                 }
                             }
                         }
                     }
                 }
             }
+        } catch (e: Throwable) {
+            Log.e(TAG, "КРИТИЧНА ПОМИЛКА ВСЕРЕДИНІ loadLinks!", e)
         }
+        
         Log.d(TAG, "==== END LOAD LINKS ====")
         return true
     }
@@ -445,7 +451,7 @@ class AnitubeinuaProvider : MainAPI() {
         ).parsedSafe<Responses>()
 
         if (responseGet?.success == false || responseGet?.response.isNullOrEmpty()) {
-            Log.w(TAG, "AJAX відповідь повернула серверну помилку (success = false або відповідь пуста)")
+            Log.w(TAG, "AJAX плейлист повернув пусту відповідь або помилку сервера")
             return null
         }
 
@@ -475,12 +481,12 @@ class AnitubeinuaProvider : MainAPI() {
             }
         }
         
-        Log.d(TAG, "Розпарсено з AJAX плейлиста -> Аудіо-категорії: ${audios.size}, Плеєри: ${listPlayers.size}, Озвучки: ${listDubStatus.size}")
+        Log.d(TAG, "Розпарсено категорій плейлиста -> Аудіо: ${audios.size}, Плеєри: ${listPlayers.size}, Озвучки: ${listDubStatus.size}")
 
         playlist.select(".playlists-videos .playlists-items li").forEach { element ->
             val audioId = element.attr("data-id")
             val episodeId = extractIntFromString(element.text())
-            val fileUrl = element.attr("data-file")
+            val url = element.attr("data-file")
 
             var isDub = true
             var audio: String? = null
@@ -514,7 +520,7 @@ class AnitubeinuaProvider : MainAPI() {
                             element.text(),
                             Link(
                                     isDub,
-                                    fileUrl,
+                                    url,
                                     audio.toString(),
                                     playerName,
                             )))
@@ -559,6 +565,7 @@ class AnitubeinuaProvider : MainAPI() {
         if (value.value[0].toString() == "0") {
             return value.value.drop(1).toIntOrNull()
         }
+
         return value.value.toIntOrNull()
     }
 }
