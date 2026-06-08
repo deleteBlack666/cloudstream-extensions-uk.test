@@ -96,114 +96,122 @@ private val TAG = "Anitubeinua"
     }
 
     override suspend fun load(url: String): AnimeLoadResponse {
-        Log.d(TAG, "==== START LOAD ====")
-        Log.d(TAG, "Завантаження сторінки аніме: $url")
+    Log.d(TAG, "==== START LOAD ====")
+    Log.d(TAG, "Завантаження сторінки аніме: $url")
 
-        val document = app.get(url,
-            headers = mapOf(
-                "User-Agent" to USER_AGENT,
-                "Referer" to mainUrl
-            )
-        ).document
+    val document = app.get(url,
+        headers = mapOf(
+            "User-Agent" to USER_AGENT,
+            "Referer" to mainUrl
+        )
+    ).document
 
-        val someInfo = document.select(".story_c_r")
+    val someInfo = document.select(".story_c_r")
 
-        val title = document.selectFirst(".story_c h2")?.text()?.trim().toString()
-        val poster = mainUrl + document.selectFirst(".story_c_left span.story_post img")?.attr("src")
-        val tags = someInfo.select("a[href*=/anime/]").map { it.text() }
-        val year = someInfo.select("a[href*=/xfsearch/year/]").text().toIntOrNull()
+    val title = document.selectFirst(".story_c h2")?.text()?.trim().toString()
+    val poster = mainUrl + document.selectFirst(".story_c_left span.story_post img")?.attr("src")
+    val tags = someInfo.select("a[href*=/anime/]").map { it.text() }
+    val year = someInfo.select("a[href*=/xfsearch/year/]").text().toIntOrNull()
 
-        val tvType = TvType.Anime
-        val description = document.selectFirst("div.my-text")?.text()?.trim()
-        val trailer = document.selectFirst(".rcol a.rollover")?.attr("href").toString()
-        val rating = document.selectFirst(".lexington-box > div:last-child span")?.text()
+    val tvType = TvType.Anime
+    val description = document.selectFirst("div.my-text")?.text()?.trim()
+    val trailer = document.selectFirst(".rcol a.rollover")?.attr("href").toString()
+    val rating = document.selectFirst(".lexington-box > div:last-child span")?.text()
 
-        val recommendations = document.select(".horizontal ul li").map { it.toSearchResponse() }
+    val recommendations = document.select(".horizontal ul li").map { it.toSearchResponse() }
 
-        val subEpisodes = mutableListOf<Episode>()
-        val dubEpisodes = mutableListOf<Episode>()
-        val id = url.split("/").last().split("-").first()
+    val subEpisodes = mutableListOf<Episode>()
+    val dubEpisodes = mutableListOf<Episode>()
+    val id = url.split("/").last().split("-").first()
+    
+    dle_login_hash =
+            document
+                    .body()
+                    .selectFirst("script")!!
+                    .html()
+                    .substringAfterLast("dle_login_hash = '")
+                    .substringBefore("';")
+
+    Log.d(TAG, "Знайдено dle_login_hash у load(): $dle_login_hash, ID новини: $id")
+
+    val ajax =
+            fromPlaylistAjax(
+                    "$mainUrl/engine/ajax/playlists.php?news_id=$id&xfield=playlist&user_hash=$dle_login_hash", referer = url)
+
+    if (!ajax.isNullOrEmpty()) {
+        Log.d(TAG, "Знайдено Ajax плейлист у load(), кількість елементів: ${ajax.size}")
         
-        dle_login_hash =
-                document
-                        .body()
-                        .selectFirst("script")!!
-                        .html()
-                        .substringAfterLast("dle_login_hash = '")
-                        .substringBefore("';")
+        // Групуємо за назвою серії, щоб створити лише один епізод в інтерфейсі
+        ajax.groupBy { it.name }.forEach { entry ->
+            val epName = entry.key
+            val playerItems = entry.value
+            val numberEpisode = playerItems.firstOrNull()?.numberEpisode
 
-        Log.d(TAG, "Знайдено dle_login_hash у load(): $dle_login_hash, ID новини: $id")
+            // Перевіряємо, чи є в цієї серії бодай один плеєр з дубляжем чи субтитрами
+            val hasDub = playerItems.any { it.urls.isDub && !it.urls.url.contains("video.ufdub") }
+            val hasSub = playerItems.any { !it.urls.isDub && !it.urls.url.contains("video.ufdub") }
 
-        val ajax =
-                fromPlaylistAjax(
-                        "$mainUrl/engine/ajax/playlists.php?news_id=$id&xfield=playlist&user_hash=$dle_login_hash", referer = url)
-
-        if (!ajax.isNullOrEmpty()) {
-            Log.d(TAG, "Знайдено Ajax плейлист у load(), кількість елементів: ${ajax.size}")
-            ajax
-                    .groupBy { it.name }
-                    .forEach { episodes ->
-                        episodes.value.forEach lit@{
-                            if (it.urls.url.contains("video.ufdub")) return@lit
-
-                            if (it.urls.isDub) {
-                                dubEpisodes.add(
-                                    newEpisode("${it.name}, $id, ${it.urls.isDub}") {
-                                        this.name = it.name
-                                        this.episode = it.numberEpisode
-                                    }
-                                )
-                            } else {
-                                subEpisodes.add(
-                                    newEpisode("${it.name}, $id, ${it.urls.isDub}") {
-                                        this.name = it.name
-                                        this.episode = it.numberEpisode
-                                    }
-                                )
-                            }
-                        }
+            if (hasDub) {
+                dubEpisodes.add(
+                    newEpisode("$epName, $id, true") {
+                        this.name = epName
+                        this.episode = numberEpisode
                     }
-            Log.d(TAG, "Завантажено епізодів у load(): Dubbed=${dubEpisodes.size}, Subbed=${subEpisodes.size}")
-        } else {
-            Log.d(TAG, "Ajax плейлист порожній або відсутній, спроба через RalodePlayer конструктор")
-            document.select("script").map { script ->
-                if (script.data().contains("RalodePlayer.init(")) {
-                    Log.d(TAG, "Знайдено RalodePlayer.init() в скриптах сторінки")
-                    val episodesList = fromVideoContructor(script)
-                    Log.d(TAG, "Розпарсено через конструктор епізодів: ${episodesList.size}")
+                )
+            }
+            if (hasSub) {
+                subEpisodes.add(
+                    newEpisode("$epName, $id, false") {
+                        this.name = epName
+                        this.episode = numberEpisode
+                    }
+                )
+            }
+        }
+        Log.d(TAG, "Завантажено епізодів у load(): Dubbed=${dubEpisodes.size}, Subbed=${subEpisodes.size}")
+    } else {
+        Log.d(TAG, "Ajax плейлист порожній або відсутній, спроба через RalodePlayer конструктор")
+        document.select("script").map { script ->
+            if (script.data().contains("RalodePlayer.init(")) {
+                Log.d(TAG, "Знайдено RalodePlayer.init() в скриптах сторінки")
+                val episodesList = fromVideoContructor(script)
+                Log.d(TAG, "Розпарсено через конструктор епізодів: ${episodesList.size}")
 
-                    episodesList.forEach { episode ->
-                        var varEpisodeNumber = episode.episodeNumber
-                        if (episode.episodeName == "ПЛЕЙЛИСТ") return@forEach
-                        if (varEpisodeNumber == null) {
-                            varEpisodeNumber = episodesList.last().episodeNumber?.plus(1)
-                        }
+                // Групуємо серії з конструктора за назвою, щоб відсікти дублі плеєрів
+                episodesList
+                    .filter { it.episodeName != "ПЛЕЙЛИСТ" }
+                    .groupBy { it.episodeName }
+                    .forEach { entry ->
+                        val epName = entry.key
+                        val firstEp = entry.value.first()
+                        val varEpisodeNumber = firstEp.episodeNumber ?: (episodesList.lastOrNull()?.episodeNumber?.plus(1))
+
                         dubEpisodes.add(
                             newEpisode("$varEpisodeNumber, $url") {
-                                this.name = episode.episodeName
-                                this.episode = episode.episodeNumber
+                                this.name = epName
+                                this.episode = firstEp.episodeNumber
                                 this.data = "$varEpisodeNumber, $url"
                             }
                         )
                     }
-                    Log.d(TAG, "Завантажено через конструктор епізодів: Dubbed=${dubEpisodes.size}, Subbed=0")
-                }
+                Log.d(TAG, "Завантажено через конструктор епізодів: Dubbed=${dubEpisodes.size}, Subbed=0")
             }
         }
-
-        Log.d(TAG, "==== END LOAD ====")
-        return newAnimeLoadResponse(title, url, tvType) {
-            this.posterUrl = poster
-            this.year = year
-            this.plot = description
-            this.tags = tags
-            this.score = Score.from10(rating)
-            addTrailer(trailer)
-            this.recommendations = recommendations
-            addEpisodes(DubStatus.Dubbed, dubEpisodes)
-            addEpisodes(DubStatus.Subbed, subEpisodes)
-        }
     }
+
+    Log.d(TAG, "==== END LOAD ====")
+    return newAnimeLoadResponse(title, url, tvType) {
+        this.posterUrl = poster
+        this.year = year
+        this.plot = description
+        this.tags = tags
+        this.score = Score.from10(rating)
+        addTrailer(trailer)
+        this.recommendations = recommendations
+        addEpisodes(DubStatus.Dubbed, dubEpisodes)
+        addEpisodes(DubStatus.Subbed, subEpisodes)
+    }
+}
 
      override suspend fun loadLinks(
         data: String,
