@@ -29,12 +29,12 @@ class AnitubeinuaProvider : MainAPI() {
             setOf(
                     TvType.AnimeMovie,
                     TvType.Anime,
-            )
+                )
 
     override val mainPage =
             mainPageOf(
                     "$mainUrl/anime/page/" to "Нові",
-            )
+                )
 
     private var dle_login_hash = ""
 
@@ -118,7 +118,6 @@ class AnitubeinuaProvider : MainAPI() {
         val dubEpisodes = mutableListOf<Episode>()
         val id = url.split("/").last().split("-").first()
         
-        // Безпечний пошук саме того тегу script, який містить необхідний хеш користувача
         dle_login_hash = document.select("script").firstOrNull { it.html().contains("dle_login_hash") }
             ?.html()
             ?.substringAfter("dle_login_hash = '")
@@ -242,18 +241,17 @@ class AnitubeinuaProvider : MainAPI() {
                                     streamUrl = streamUrl,
                                     referer = "https://qeruya.cyou")
                                     .dropLast(1).forEach { link ->
-                                        // Додаємо назву озвучення / субтитрів до імені посилання
                                         val finalName = "${link.name} (${it.urls.name})"
                                         if (addedLinks.add("${link.url}_$finalName")) {
-                                            callback(ExtractorLink(
-                                                link.source,
-                                                finalName,
-                                                link.url,
-                                                link.referer,
-                                                link.quality,
-                                                link.type,
-                                                link.headers,
-                                                link.extractorData
+                                            callback(newExtractorLink(
+                                                source = link.source,
+                                                name = finalName,
+                                                url = link.url,
+                                                referer = link.referer,
+                                                quality = link.quality,
+                                                type = link.type,
+                                                headers = link.headers,
+                                                extractorData = link.extractorData
                                             ))
                                         }
                                     }
@@ -331,18 +329,17 @@ class AnitubeinuaProvider : MainAPI() {
                                             streamUrl = streamUrl,
                                             referer = "https://qeruya.cyou")
                                             .dropLast(1).forEach { link ->
-                                                // Додаємо назву плеєра / типу до імені посилання у RalodePlayer
                                                 val finalName = "${link.name} (${dub.playerName})"
                                                 if (addedLinks.add("${link.url}_$finalName")) {
-                                                    callback(ExtractorLink(
-                                                        link.source,
-                                                        finalName,
-                                                        link.url,
-                                                        link.referer,
-                                                        link.quality,
-                                                        link.type,
-                                                        link.headers,
-                                                        link.extractorData
+                                                    callback(newExtractorLink(
+                                                        source = link.source,
+                                                        name = finalName,
+                                                        url = link.url,
+                                                        referer = link.referer,
+                                                        quality = link.quality,
+                                                        type = link.type,
+                                                        headers = link.headers,
+                                                        extractorData = link.extractorData
                                                     ))
                                                 }
                                             }
