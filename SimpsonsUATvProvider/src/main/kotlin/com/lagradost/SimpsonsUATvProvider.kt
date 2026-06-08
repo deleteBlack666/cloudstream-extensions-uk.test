@@ -203,7 +203,7 @@ class SimpsonsUATvProvider : MainAPI() {
         if (request.data == "$mainUrl/") {
             if (page == 1) {
                 try {
-                    val doc = app.get(mainUrl, headers = headers(), timeout = 15).document
+                    val doc = app.get(mainUrl, headers = headers()).document
                     val updates = doc.select("div.ep_slider div.movie_item").take(15).mapNotNull { el ->
                         val href = el.selectFirst("a")?.attr("href") ?: return@mapNotNull null
                         val posterUrl = extractImageUrl(el)
