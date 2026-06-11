@@ -1,6 +1,6 @@
 [versions]
 android-gradle-plugin = "8.13.2"
-cloudstream3 = "pre-release"
+cloudstream3 = " 235863f"
 cloudstreamapi = "0.1.6"
 recloudstream-gradle = "81b1d42"
 gson = "2.13.2"
