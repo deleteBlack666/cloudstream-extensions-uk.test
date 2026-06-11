@@ -63,22 +63,17 @@ subprojects {
         val cloudstream by configurations
         val implementation by configurations
         val libs = rootProject.libs
-        val apkTasks = listOf("deployWithAdb", "build", "makePluginsJson")
-        val useApk = gradle.startParameter.taskNames.any { taskName ->
-            apkTasks.any { apkTask ->
-                taskName.contains(apkTask, ignoreCase = true)
-            }
-        }
 
-        // If the task is specifically to compile the app then use the stubs, otherwise use the library.
-        cloudstream(libs.cloudstream3)
+        // 1. Вказуємо шлях до вашого локального файлу
+        val localCloudstreamJar = files("${rootProject.projectDir}/libs/classes.jar")
+        
+        // 2. Передаємо його в конфігурацію cloudstream замість libs.cloudstream3
+        cloudstream(localCloudstreamJar)
 
-        // these dependencies can include any of those which are added by the app,
-        // but you dont need to include any of them if you dont need them
-        // https://github.com/recloudstream/cloudstream/blob/master/app/build.gradle
-        implementation(kotlin("stdlib")) // adds standard kotlin features, like listOf, mapOf etc
-        implementation(libs.nicehttp) // http library
-        implementation(libs.jsoup) // html parser
+        // 3. Стандартні залежності
+        implementation(kotlin("stdlib")) 
+        implementation(libs.nicehttp) 
+        implementation(libs.jsoup) 
     }
 
     tasks.withType<Test>().configureEach {
