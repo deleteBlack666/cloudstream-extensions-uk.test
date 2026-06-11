@@ -60,17 +60,32 @@ subprojects {
     }
 
     dependencies {
+    dependencies {
         val cloudstream by configurations
         val implementation by configurations
         val libs = rootProject.libs
 
-        // 1. Вказуємо шлях до вашого локального файлу
-        val localCloudstreamJar = files("${rootProject.projectDir}/libs/classes.jar")
-        
-        // 2. Передаємо його в конфігурацію cloudstream замість libs.cloudstream3
-        cloudstream(localCloudstreamJar)
+        // 1. Визначаємо шлях, куди буде збережено файл
+        val cloudstreamJar = layout.buildDirectory.file("cloudstream/classes.jar").get().asFile
 
-        // 3. Стандартні залежності
+        // 2. Завантажуємо файл, якщо його ще немає
+        if (!cloudstreamJar.exists()) {
+            cloudstreamJar.parentFile.mkdirs()
+            
+            val url = java.net.URL("https://github.com/deleteBlack666/cloudstream-extensions-uk.test/releases/download/dependencies-v1/classes.jar")
+            
+            url.openStream().use { input ->
+                cloudstreamJar.outputStream().use { output ->
+                    input.copyTo(output)
+                }
+            }
+            println("Завантажено classes.jar (${cloudstreamJar.length() / 1024 / 1024} MB)")
+        }
+
+        // 3. Передаємо завантажений файл у конфігурацію
+        cloudstream(files(cloudstreamJar))
+
+        // 4. Стандартні залежності
         implementation(kotlin("stdlib")) 
         implementation(libs.nicehttp) 
         implementation(libs.jsoup) 
