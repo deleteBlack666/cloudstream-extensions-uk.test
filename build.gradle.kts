@@ -60,7 +60,6 @@ subprojects {
     }
 
     dependencies {
-    dependencies {
         val cloudstream by configurations
         val implementation by configurations
         val libs = rootProject.libs
