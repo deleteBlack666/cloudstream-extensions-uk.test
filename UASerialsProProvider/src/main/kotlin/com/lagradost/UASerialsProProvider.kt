@@ -418,9 +418,11 @@ class UASerialsProProvider : MainAPI() {
             resultBytes[i - 1] = ((decoded[i].toInt() and 0xFF) xor key).toByte()
         }
         String(resultBytes, Charsets.UTF_8)
-    } catch (e: Exception) { null }
-        }
-        }
+    } catch (e: Exception) { 
+        null 
+    }
+}
+
 
         fun torDecrypt(encoded: String): String {
             if (encoded.isEmpty()) return ""
