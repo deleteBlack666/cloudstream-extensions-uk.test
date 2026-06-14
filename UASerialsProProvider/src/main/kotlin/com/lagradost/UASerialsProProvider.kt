@@ -403,12 +403,11 @@ class UASerialsProProvider : MainAPI() {
 
         // Tortuga player XOR декодер (tor.core.min.js #w + #_ функції)
         // Алгоритм: перший байт = сіль, далі XOR з (salt + 7*i + 13) % 256
-        @OptIn(kotlin.io.encoding.ExperimentalEncodingApi::class)
-fun tortugaDecode(encoded: String): String? {
+        fun tortugaDecode(encoded: String): String? {
     if (encoded.isBlank()) return encoded
     return try {
-        val decoded = kotlin.io.encoding.Base64.withPadding(kotlin.io.encoding.Base64.PaddingOption.PRESENT_OPTIONAL)
-            .decode(encoded)
+        val clean = encoded.trimEnd('=')
+        val decoded = android.util.Base64.decode(clean, android.util.Base64.DEFAULT)
         if (decoded.isEmpty()) return encoded
 
         val salt = decoded[0].toInt() and 0xFF
@@ -424,7 +423,7 @@ fun tortugaDecode(encoded: String): String? {
     } catch (e: Exception) {
         null
     }
-}
+        }
 
         fun torDecrypt(encoded: String): String {
             if (encoded.isEmpty()) return ""
