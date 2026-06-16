@@ -90,7 +90,12 @@ class UASerialsProProvider : MainAPI() {
         page: Int,
         request: MainPageRequest
     ): HomePageResponse {
-        val document = app.get(request.data + page).document
+        val url = if (page <= 1) {
+            request.data.removeSuffix("page/")
+        } else {
+            "${request.data}$page/"
+        }
+        val document = app.get(url).document
 
         val home = document.select(animeSelector).map {
             it.toSearchResponse()
