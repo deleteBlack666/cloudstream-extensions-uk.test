@@ -63,10 +63,10 @@ class UASerialsProProvider : MainAPI() {
     // Sections
     override val mainPage = mainPageOf(
         "$mainUrl/series/page/" to "Серіали",
+        "$mainUrl/films/page/" to "Фільми"
         "$mainUrl/cartoons/page/" to "Мультсеріали",
         "$mainUrl/fcartoon/page/" to "Мультфільми",
         "$mainUrl/anime/page/" to "Аніме",
-        "$mainUrl/films/page/" to "Фільми"
     )
 
     // Main Page
@@ -305,7 +305,6 @@ class UASerialsProProvider : MainAPI() {
         }
 
         // Serial Episode
-        // Serial Episode
         val fileStr = dataList[0]
         val subtitleStr = if (dataList.size > 1) dataList[1] else ""
 
@@ -313,8 +312,6 @@ class UASerialsProProvider : MainAPI() {
 
         fileStr.split(";").forEach { track ->
             if (track.isNotBlank()) {
-                // Each track may have a "(subtitle:...)" tail embedded by the JSON source.
-                // Strip it before extracting the m3u8 url, otherwise the url becomes invalid.
                 val subTailMatch = "\\(subtitle:(.*)\\)$".toRegex().find(track)
                 val cleanTrack = if (subTailMatch != null) {
                     track.substring(0, subTailMatch.range.first)
@@ -491,4 +488,4 @@ class UASerialsProProvider : MainAPI() {
             return decoded?.let { reverseText(it) }
         }
     }
-}
+} 
