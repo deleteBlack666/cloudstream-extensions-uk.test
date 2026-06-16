@@ -63,7 +63,7 @@ class UASerialsProProvider : MainAPI() {
     // Sections
     override val mainPage = mainPageOf(
         "$mainUrl/series/page/" to "Серіали",
-        "$mainUrl/films/page/" to "Фільми"
+        "$mainUrl/films/page/" to "Фільми",
         "$mainUrl/cartoons/page/" to "Мультсеріали",
         "$mainUrl/fcartoon/page/" to "Мультфільми",
         "$mainUrl/anime/page/" to "Аніме",
