@@ -35,7 +35,6 @@ class AnimeONProvider : MainAPI() {
         "$apiUrl?pageSize=24&pageIndex=%d" to "Нове аніме на сайті",
     )
 
-    // --- БЕЗПЕЧНІ МОДЕЛІ ДЛЯ ВИПРАВЛЕННЯ КРАШУ ---
     private data class SafeResult(
         @SerializedName("id") val id: Int,
         @SerializedName("titleUa") val titleUa: String,
@@ -84,7 +83,6 @@ class AnimeONProvider : MainAPI() {
     private data class SafePlayerEpisodes(
         @SerializedName("episodes") val episodes: List<FundubEpisode>
     )
-    // -------------------------------------------
 
     private data class LocalResult(
         val id: Int,
