@@ -340,7 +340,7 @@ class AnimeONProvider : MainAPI() {
                     }
                 }
 
-                                episodeSources.keys.sorted().forEach { epNum ->
+                     episodeSources.keys.sorted().forEach { epNum ->
                     val sources = episodeSources[epNum] ?: return@forEach
                     var epPoster: String? = episodePosters[epNum]
 
@@ -350,20 +350,20 @@ class AnimeONProvider : MainAPI() {
                         }
                         if (ashdiSource != null) epPoster = getAshdiPoster(ashdiSource.videoUrl!!)
                     }
-
+ 
                     val dataJson = "[" + sources.joinToString(",") { source ->
                         """{"translationName":"${source.translationName.replace("\"", "\\\"")}","playerName":"${source.playerName.replace("\"", "\\\"")}","videoUrl":${source.videoUrl?.let { "\"${it.replace("\"", "\\\"")}\"" } ?: "null"},"fileUrl":${source.fileUrl?.let { "\"${it.replace("\"", "\\\"")}\"" } ?: "null"}}"""
                     } + "]"
-                                    
+
                     episodes.add(
-                        com.lagradost.cloudstream3.Episode(
-                            data = dataJson,
-                            name = "Епізод $epNum",
-                            episode = epNum,
-                            posterUrl = epPoster
-                        )
+                        newEpisode(dataJson).apply {
+                            this.name = "Епізод $epNum"
+                            this.episode = epNum
+                            this.posterUrl = epPoster
+                        }
                     )
                 }
+
 
             } catch (e: Exception) { }
         }
