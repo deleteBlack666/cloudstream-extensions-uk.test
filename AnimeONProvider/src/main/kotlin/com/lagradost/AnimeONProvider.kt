@@ -39,6 +39,16 @@ class AnimeONProvider : MainAPI() {
         val totalCount: Int? = null,
     )
 
+    private data class LocalResult(
+        val id: Int,
+        val titleUa: String,
+        val slug: String?,
+        val episodesAired: Int?,
+        val rating: String?,
+        val image: Image,
+        val description: String? = null
+    )
+
     private data class RedirectResponse(
         val moved: Boolean? = null,
         val redirectTo: String? = null,
@@ -201,12 +211,13 @@ class AnimeONProvider : MainAPI() {
         }
     }
 
-    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         if (request.name == "Популярні аніме") {
             if (page != 1) return newHomePageResponse(request.name, emptyList())
             val currentDate = java.text.SimpleDateFormat("EEE MMM dd yyyy", java.util.Locale.ENGLISH).format(java.util.Date())
             val jsonText = fetchJsonOrNull("${request.data}$currentDate?withView=false") ?: return newHomePageResponse(request.name, emptyList())
-            val parsedJSON = AppUtils.parseJson<List<Results>>(jsonText)
+            
+            val parsedJSON = AppUtils.parseJson<List<LocalResult>>(jsonText)
             return newHomePageResponse(request.name, parsedJSON.map {
                 newAnimeSearchResponse(it.titleUa, "anime/${it.id}", TvType.Anime) {
                     this.posterUrl = posterApi.format(it.image.preview)
@@ -215,6 +226,7 @@ class AnimeONProvider : MainAPI() {
         }
         if (request.data.contains("seasons") && page != 1) return newHomePageResponse(emptyList())
         val jsonText = fetchJsonOrNull(if (request.data.contains("%d")) request.data.format(page) else request.data) ?: return newHomePageResponse(request.name, emptyList())
+        
         return if (!request.data.contains("seasons")) {
             val parsedJSON = AppUtils.parseJson<NewAnimeModel>(jsonText)
             newHomePageResponse(request.name, parsedJSON.results.map {
@@ -223,7 +235,7 @@ class AnimeONProvider : MainAPI() {
                 }
             })
         } else {
-            val parsedJSON = AppUtils.parseJson<List<Results>>(jsonText)
+            val parsedJSON = AppUtils.parseJson<List<LocalResult>>(jsonText)
             newHomePageResponse(request.name, parsedJSON.map {
                 newAnimeSearchResponse(it.titleUa, "anime/${it.id}", TvType.Anime) {
                     this.posterUrl = posterApi.format(it.image.preview)
