@@ -28,7 +28,7 @@ subprojects {
         // when running through github workflow, GITHUB_REPOSITORY should contain current repository name
         // you can modify it to use other git hosting services, like gitlab
         // setRepo(System.getenv("GITHUB_REPOSITORY") ?: "https://github.com/deleteBlack666/cloudstream-extensions-uk")
-        setRepo("https://github.com/deleteBlack666/cloudstream-extensions-uk.test")
+        setRepo("https://github.com/deleteBlack666/cloudstream-extensions-uk")
         authors = listOf("deleteBlack666")
     }
 
@@ -63,31 +63,22 @@ subprojects {
         val cloudstream by configurations
         val implementation by configurations
         val libs = rootProject.libs
-
-        // 1. Визначаємо шлях, куди буде збережено файл
-        val cloudstreamJar = layout.buildDirectory.file("cloudstream/classes.jar").get().asFile
-
-        // 2. Завантажуємо файл, якщо його ще немає
-        if (!cloudstreamJar.exists()) {
-            cloudstreamJar.parentFile.mkdirs()
-            
-            val url = java.net.URL("https://github.com/deleteBlack666/cloudstream-extensions-uk.test/releases/download/dependencies-v1/classes.jar")
-            
-            url.openStream().use { input ->
-                cloudstreamJar.outputStream().use { output ->
-                    input.copyTo(output)
-                }
+        val apkTasks = listOf("deployWithAdb", "build", "makePluginsJson")
+        val useApk = gradle.startParameter.taskNames.any { taskName ->
+            apkTasks.any { apkTask ->
+                taskName.contains(apkTask, ignoreCase = true)
             }
-            println("Завантажено classes.jar (${cloudstreamJar.length() / 1024 / 1024} MB)")
         }
 
-        // 3. Передаємо завантажений файл у конфігурацію
-        cloudstream(files(cloudstreamJar))
+        // If the task is specifically to compile the app then use the stubs, otherwise use the library.
+        cloudstream(libs.cloudstream3)
 
-        // 4. Стандартні залежності
-        implementation(kotlin("stdlib")) 
-        implementation(libs.nicehttp) 
-        implementation(libs.jsoup) 
+        // these dependencies can include any of those which are added by the app,
+        // but you dont need to include any of them if you dont need them
+        // https://github.com/recloudstream/cloudstream/blob/master/app/build.gradle
+        implementation(kotlin("stdlib")) // adds standard kotlin features, like listOf, mapOf etc
+        implementation(libs.nicehttp) // http library
+        implementation(libs.jsoup) // html parser
     }
 
     tasks.withType<Test>().configureEach {
