@@ -963,14 +963,15 @@ class AnimeONProvider : MainAPI() {
                         }
                     }
 
-                    val contentUrlRegex = Regex("""(https?://s\.moonanime\.art/content/[^\s"'`]+)""")
+                                        val contentUrlRegex = Regex("""(https?://s\.moonanime\.art/content/[^\s"'`]+)""")
                     val contentMatch = contentUrlRegex.find(decodedJs)?.groupValues?.get(1)
                     if (!contentMatch.isNullOrEmpty() && !contentMatch.contains(Regex("""\.(jpg|jpeg|png)$"""))) {
-                        val resolved = resolveMoonContent(contentUrl)
+                        val resolved = resolveMoonContent(contentMatch) 
                         if (!resolved.isNullOrEmpty()) {
                             return resolved
                         }
                     }
+
                 }
             }
         }
