@@ -1,6 +1,5 @@
 package com.lagradost
 
-import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addMalId
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
@@ -36,14 +35,14 @@ class AnimeONProvider : MainAPI() {
     )
 
     private data class SearchApiResponse(
-        @JsonProperty("results") val results: List<Result>,
-        @JsonProperty("totalCount") val totalCount: Int? = null,
+        val results: List<Result>,
+        val totalCount: Int? = null,
     )
 
     private data class RedirectResponse(
-        @JsonProperty("moved") val moved: Boolean? = null,
-        @JsonProperty("redirectTo") val redirectTo: String? = null,
-        @JsonProperty("slug") val slug: String? = null,
+        val moved: Boolean? = null,
+        val redirectTo: String? = null,
+        val slug: String? = null,
     )
 
     private data class EpisodeSource(
@@ -54,17 +53,17 @@ class AnimeONProvider : MainAPI() {
     )
 
     private data class DirectPlayerResponse(
-        @JsonProperty("videoUrl") val videoUrl: String? = null,
-        @JsonProperty("fileUrl") val fileUrl: String? = null,
+        val videoUrl: String? = null,
+        val fileUrl: String? = null,
     )
 
     private data class FranchiseItem(
-        @JsonProperty("id") val id: Int,
-        @JsonProperty("slug") val slug: String?,
-        @JsonProperty("titleUa") val titleUa: String,
-        @JsonProperty("type") val type: String?,
-        @JsonProperty("image") val image: Image?,
-        @JsonProperty("releaseDate") val releaseDate: String?,
+        val id: Int,
+        val slug: String?,
+        val titleUa: String,
+        val type: String?,
+        val image: Image?,
+        val releaseDate: String?,
     )
 
     private fun fixMovieExtractorLink(link: ExtractorLink, sourceName: String): ExtractorLink {
@@ -162,7 +161,7 @@ class AnimeONProvider : MainAPI() {
 
     private suspend fun resolveMoonContent(contentUrl: String): String? {
         return try {
-            // 
+            
             val cookieResponse = app.get(
                 "https://moonanime.art/",
                 headers = mapOf(
@@ -174,7 +173,7 @@ class AnimeONProvider : MainAPI() {
             )
             val cookies = cookieResponse.cookies
 
-            // 
+            
             val response = app.get(
                 contentUrl,
                 headers = mapOf(
@@ -352,7 +351,7 @@ class AnimeONProvider : MainAPI() {
                         if (ashdiSource != null) epPoster = getAshdiPoster(ashdiSource.videoUrl!!)
                     }
 
-                    val dataJson = AppUtils.toJson(sources)
+                    val dataJson = AppUtils.mapper.writeValueAsString(sources)
                     episodes.add(newEpisode(dataJson) {
                         this.name = "Епізод $epNum"
                         this.posterUrl = epPoster
@@ -705,7 +704,7 @@ class AnimeONProvider : MainAPI() {
                         val filtered = streams.dropLast(1)
                         val finalStreams = if (filtered.isNotEmpty()) filtered else streams
                         finalStreams.forEach {
-                            // 
+                            
                             callback(fixMovieExtractorLink(it, sourceName))
                         }
                     }
@@ -877,7 +876,6 @@ class AnimeONProvider : MainAPI() {
                 val decodedJs = moonOuterDecode(atobMatch)
                 if (decodedJs.isNotEmpty()) {
 
-                    // 
                     val keyRegex = Regex("""var\s+k\s*=\s*["']([^"']+)["']""")
                     val xorKey = keyRegex.find(decodedJs)?.groupValues?.get(1)
 
