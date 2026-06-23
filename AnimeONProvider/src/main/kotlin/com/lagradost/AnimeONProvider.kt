@@ -1,5 +1,6 @@
 package com.lagradost
 
+import com.google.gson.annotations.SerializedName
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addMalId
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
@@ -34,10 +35,30 @@ class AnimeONProvider : MainAPI() {
         "$apiUrl?pageSize=24&pageIndex=%d" to "Нове аніме на сайті",
     )
 
-    private data class SearchApiResponse(
-        val results: List<Result>,
-        val totalCount: Int? = null,
+    // --- БЕЗПЕЧНІ МОДЕЛІ ДЛЯ ВИПРАВЛЕННЯ КРАШУ ---
+    private data class SafeResult(
+        @SerializedName("id") val id: Int,
+        @SerializedName("titleUa") val titleUa: String,
+        @SerializedName("description") val description: String? = null,
+        @SerializedName("image") val image: Image,
+        @SerializedName("malId") val malId: Int? = null,
+        @SerializedName("rating") val rating: Double? = 0.0,
+        @SerializedName("status") val status: String? = null,
+        @SerializedName("type") val type: String? = null,
+        @SerializedName("genres") val genres: List<Genres>? = null,
+        @SerializedName("episodes") val episodes: Int? = null
     )
+
+    private data class SafeNewAnimeModel(
+        @SerializedName("results") val results: List<SafeResult>,
+        @SerializedName("totalCount") val totalCount: Int? = 0
+    )
+
+    private data class SafeSearchApiResponse(
+        @SerializedName("results") val results: List<SafeResult>,
+        @SerializedName("totalCount") val totalCount: Int? = 0
+    )
+    // -------------------------------------------
 
     private data class LocalResult(
         val id: Int,
@@ -171,7 +192,6 @@ class AnimeONProvider : MainAPI() {
 
     private suspend fun resolveMoonContent(contentUrl: String): String? {
         return try {
-            
             val cookieResponse = app.get(
                 "https://moonanime.art/",
                 headers = mapOf(
@@ -183,7 +203,6 @@ class AnimeONProvider : MainAPI() {
             )
             val cookies = cookieResponse.cookies
 
-            
             val response = app.get(
                 contentUrl,
                 headers = mapOf(
@@ -211,7 +230,7 @@ class AnimeONProvider : MainAPI() {
         }
     }
 
-        override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         if (request.name == "Популярні аніме") {
             if (page != 1) return newHomePageResponse(request.name, emptyList())
             val currentDate = java.text.SimpleDateFormat("EEE MMM dd yyyy", java.util.Locale.ENGLISH).format(java.util.Date())
@@ -228,7 +247,7 @@ class AnimeONProvider : MainAPI() {
         val jsonText = fetchJsonOrNull(if (request.data.contains("%d")) request.data.format(page) else request.data) ?: return newHomePageResponse(request.name, emptyList())
         
         return if (!request.data.contains("seasons")) {
-            val parsedJSON = AppUtils.parseJson<NewAnimeModel>(jsonText)
+            val parsedJSON = AppUtils.parseJson<SafeNewAnimeModel>(jsonText) // Використовуємо Safe модель
             newHomePageResponse(request.name, parsedJSON.results.map {
                 newAnimeSearchResponse(it.titleUa, "anime/${it.id}", TvType.Anime) {
                     this.posterUrl = posterApi.format(it.image.preview)
@@ -255,7 +274,7 @@ class AnimeONProvider : MainAPI() {
         val url = "$searchApi${query}"
         val jsonText = fetchJsonOrNull(url) ?: return emptyList()
         return try {
-            val response = AppUtils.parseJson<SearchApiResponse>(jsonText)
+            val response = AppUtils.parseJson<SafeSearchApiResponse>(jsonText) // Використовуємо Safe модель
             response.results.map { result ->
                 newAnimeSearchResponse(result.titleUa, "anime/${result.id}", TvType.Anime) {
                     this.posterUrl = posterApi.format(result.image.preview)
@@ -352,7 +371,7 @@ class AnimeONProvider : MainAPI() {
                     }
                 }
 
-                     episodeSources.keys.sorted().forEach { epNum ->
+                episodeSources.keys.sorted().forEach { epNum ->
                     val sources = episodeSources[epNum] ?: return@forEach
                     var epPoster: String? = episodePosters[epNum]
 
@@ -375,7 +394,6 @@ class AnimeONProvider : MainAPI() {
                         }
                     )
                 }
-
 
             } catch (e: Exception) { }
         }
@@ -722,7 +740,6 @@ class AnimeONProvider : MainAPI() {
                         val filtered = streams.dropLast(1)
                         val finalStreams = if (filtered.isNotEmpty()) filtered else streams
                         finalStreams.forEach {
-                            
                             callback(fixMovieExtractorLink(it, sourceName))
                         }
                     }
@@ -945,7 +962,7 @@ class AnimeONProvider : MainAPI() {
                 }
             }
             if (qualityResults.isNotEmpty()) {
-                return qualityResults.joinToString(",")
+                return qualityResults.joinToString(".")
             }
         }
 
