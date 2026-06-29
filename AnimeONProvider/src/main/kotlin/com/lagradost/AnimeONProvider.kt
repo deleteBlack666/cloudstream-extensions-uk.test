@@ -405,7 +405,16 @@ class AnimeONProvider : MainAPI() {
                         if (ashdiSource != null) epPoster = getAshdiPoster(ashdiSource.videoUrl!!)
                     }
 
-                    val dataJson = AppUtils.toJson(sources)
+                    val dataJson = org.json.JSONArray().also { arr ->
+                        sources.forEach { s ->
+                            arr.put(org.json.JSONObject().apply {
+                                put("translationName", s.translationName)
+                                put("playerName", s.playerName)
+                                put("videoUrl", s.videoUrl ?: org.json.JSONObject.NULL)
+                                put("fileUrl", s.fileUrl ?: org.json.JSONObject.NULL)
+                            })
+                        }
+                    }.toString()
 
                     episodes.add(
                         newEpisode(dataJson).apply {
