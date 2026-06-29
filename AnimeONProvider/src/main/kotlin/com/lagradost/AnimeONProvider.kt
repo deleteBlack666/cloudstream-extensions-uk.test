@@ -1,6 +1,6 @@
 package com.lagradost
 
-import com.fasterxml.jackson.annotation.JsonProperty
+import com.google.gson.annotations.SerializedName
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addMalId
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
@@ -36,89 +36,89 @@ class AnimeONProvider : MainAPI() {
     )
 
     private data class SafeResult(
-        @JsonProperty("id") val id: Int,
-        @JsonProperty("titleUa") val titleUa: String,
-        @JsonProperty("description") val description: String? = null,
-        @JsonProperty("image") val image: Image,
-        @JsonProperty("malId") val malId: Int? = null,
-        @JsonProperty("rating") val rating: Double? = 0.0,
-        @JsonProperty("status") val status: String? = null,
-        @JsonProperty("type") val type: String? = null,
-        @JsonProperty("genres") val genres: List<Genres>? = null,
-        @JsonProperty("episodes") val episodes: Int? = null
+        @SerializedName("id") val id: Int,
+        @SerializedName("titleUa") val titleUa: String,
+        @SerializedName("description") val description: String? = null,
+        @SerializedName("image") val image: Image,
+        @SerializedName("malId") val malId: Int? = null,
+        @SerializedName("rating") val rating: Double? = 0.0,
+        @SerializedName("status") val status: String? = null,
+        @SerializedName("type") val type: String? = null,
+        @SerializedName("genres") val genres: List<Genres>? = null,
+        @SerializedName("episodes") val episodes: Int? = null
     )
 
     private data class SafeNewAnimeModel(
-        @JsonProperty("results") val results: List<SafeResult>,
-        @JsonProperty("totalCount") val totalCount: Int? = 0
+        @SerializedName("results") val results: List<SafeResult>,
+        @SerializedName("totalCount") val totalCount: Int? = 0
     )
 
     private data class SafeSearchApiResponse(
-        @JsonProperty("results") val results: List<SafeResult>,
-        @JsonProperty("totalCount") val totalCount: Int? = 0
+        @SerializedName("results") val results: List<SafeResult>,
+        @SerializedName("totalCount") val totalCount: Int? = 0
     )
 
     private data class SafeAnimeInfoModel(
-        @JsonProperty("id") val id: Int,
-        @JsonProperty("titleUa") val titleUa: String,
-        @JsonProperty("titleEn") val titleEn: String? = null,
-        @JsonProperty("description") val description: String? = null,
-        @JsonProperty("image") val image: Image? = null,
-        @JsonProperty("backgroundImage") val backgroundImage: String? = null,
-        @JsonProperty("trailer") val trailer: String? = null,
-        @JsonProperty("rating") val rating: Double? = 0.0,
-        @JsonProperty("status") val status: String? = "completed",
-        @JsonProperty("type") val type: String? = "tv",
-        @JsonProperty("genres") val genres: List<Genres>? = null,
-        @JsonProperty("episodes") val episodes: Int? = 0,
-        @JsonProperty("episodeTime") val episodeTime: String? = "",
-        @JsonProperty("releaseDate") val releaseDate: String? = null,
-        @JsonProperty("malId") val malId: Int? = 0
+        @SerializedName("id") val id: Int,
+        @SerializedName("titleUa") val titleUa: String,
+        @SerializedName("titleEn") val titleEn: String? = null,
+        @SerializedName("description") val description: String? = null,
+        @SerializedName("image") val image: Image? = null,
+        @SerializedName("backgroundImage") val backgroundImage: String? = null,
+        @SerializedName("trailer") val trailer: String? = null,
+        @SerializedName("rating") val rating: Double? = 0.0,
+        @SerializedName("status") val status: String? = "completed",
+        @SerializedName("type") val type: String? = "tv",
+        @SerializedName("genres") val genres: List<Genres>? = null,
+        @SerializedName("episodes") val episodes: Int? = 0,
+        @SerializedName("episodeTime") val episodeTime: String? = "",
+        @SerializedName("releaseDate") val releaseDate: String? = null,
+        @SerializedName("malId") val malId: Int? = 0
     )
 
     private data class SafeTranslationsResponse(
-        @JsonProperty("translations") val translations: List<TranslationItem>
+        @SerializedName("translations") val translations: List<TranslationItem>
     )
 
     private data class SafePlayerEpisodes(
-        @JsonProperty("episodes") val episodes: List<FundubEpisode>
+        @SerializedName("episodes") val episodes: List<FundubEpisode>
     )
 
     private data class LocalResult(
-        @JsonProperty("id") val id: Int,
-        @JsonProperty("titleUa") val titleUa: String,
-        @JsonProperty("slug") val slug: String?,
-        @JsonProperty("episodesAired") val episodesAired: Int?,
-        @JsonProperty("rating") val rating: String?,
-        @JsonProperty("image") val image: Image,
-        @JsonProperty("description") val description: String? = null
+        val id: Int,
+        val titleUa: String,
+        val slug: String?,
+        val episodesAired: Int?,
+        val rating: String?,
+        val image: Image,
+        val description: String? = null
     )
 
     private data class RedirectResponse(
-        @JsonProperty("moved") val moved: Boolean? = null,
-        @JsonProperty("redirectTo") val redirectTo: String? = null,
-        @JsonProperty("slug") val slug: String? = null,
+        val moved: Boolean? = null,
+        val redirectTo: String? = null,
+        val slug: String? = null,
     )
 
     private data class EpisodeSource(
-        @JsonProperty("translationName") val translationName: String,
-        @JsonProperty("playerName") val playerName: String,
-        @JsonProperty("videoUrl") val videoUrl: String?,
-        @JsonProperty("fileUrl") val fileUrl: String?,
+        val translationName: String,
+        val playerName: String,
+        val videoUrl: String?,
+        val fileUrl: String?,
     )
 
     private data class DirectPlayerResponse(
-        @JsonProperty("videoUrl") val videoUrl: String? = null,
-        @JsonProperty("fileUrl") val fileUrl: String? = null,
+        val videoUrl: String? = null,
+        val fileUrl: String? = null,
     )
 
     private data class FranchiseItem(
-        @JsonProperty("id") val id: Int,
-        @JsonProperty("slug") val slug: String?,
-        @JsonProperty("titleUa") val titleUa: String,
-        @JsonProperty("type") val type: String?,
-        @JsonProperty("image") val image: Image?,
-        @JsonProperty("releaseDate") val releaseDate: String?,
+        val id: Int,
+        val slug: String?,
+        val titleUa: String,
+        val type: String?,
+        val image: Image?,
+        val releaseDate: String?,
     )
 
     private fun fixMovieExtractorLink(link: ExtractorLink, sourceName: String): ExtractorLink {
@@ -259,7 +259,7 @@ class AnimeONProvider : MainAPI() {
             if (page != 1) return newHomePageResponse(request.name, emptyList())
             val currentDate = java.text.SimpleDateFormat("EEE MMM dd yyyy", java.util.Locale.ENGLISH).format(java.util.Date())
             val jsonText = fetchJsonOrNull("${request.data}$currentDate?withView=false") ?: return newHomePageResponse(request.name, emptyList())
-
+            
             val parsedJSON = AppUtils.parseJson<List<LocalResult>>(jsonText)
             return newHomePageResponse(request.name, parsedJSON.map {
                 newAnimeSearchResponse(it.titleUa, "anime/${it.id}", TvType.Anime) {
@@ -269,7 +269,7 @@ class AnimeONProvider : MainAPI() {
         }
         if (request.data.contains("seasons") && page != 1) return newHomePageResponse(emptyList())
         val jsonText = fetchJsonOrNull(if (request.data.contains("%d")) request.data.format(page) else request.data) ?: return newHomePageResponse(request.name, emptyList())
-
+        
         return if (!request.data.contains("seasons")) {
             val parsedJSON = AppUtils.parseJson<SafeNewAnimeModel>(jsonText)
             newHomePageResponse(request.name, parsedJSON.results.map {
@@ -405,8 +405,10 @@ class AnimeONProvider : MainAPI() {
                         }
                         if (ashdiSource != null) epPoster = getAshdiPoster(ashdiSource.videoUrl!!)
                     }
-
-                    val dataJson = AppUtils.toJson(sources)
+ 
+                    val dataJson = "[" + sources.joinToString(",") { source ->
+                        """{"translationName":"${source.translationName.replace("\"", "\\\"")}","playerName":"${source.playerName.replace("\"", "\\\"")}","videoUrl":${source.videoUrl?.let { "\"${it.replace("\"", "\\\"")}\"" } ?: "null"},"fileUrl":${source.fileUrl?.let { "\"${it.replace("\"", "\\\"")}\"" } ?: "null"}}"""
+                    } + "]"
 
                     episodes.add(
                         newEpisode(dataJson).apply {
@@ -959,14 +961,15 @@ class AnimeONProvider : MainAPI() {
                         }
                     }
 
-                    val contentUrlRegex = Regex("""(https?://s\.moonanime\.art/content/[^\s"'`]+)""")
+                                        val contentUrlRegex = Regex("""(https?://s\.moonanime\.art/content/[^\s"'`]+)""")
                     val contentMatch = contentUrlRegex.find(decodedJs)?.groupValues?.get(1)
                     if (!contentMatch.isNullOrEmpty() && !contentMatch.contains(Regex("""\.(jpg|jpeg|png)$"""))) {
-                        val resolved = resolveMoonContent(contentMatch)
+                        val resolved = resolveMoonContent(contentMatch) 
                         if (!resolved.isNullOrEmpty()) {
                             return resolved
                         }
                     }
+
                 }
             }
         }
