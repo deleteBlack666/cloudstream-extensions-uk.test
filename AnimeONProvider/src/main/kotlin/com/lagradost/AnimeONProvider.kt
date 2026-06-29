@@ -1,6 +1,5 @@
 package com.lagradost
 
-import com.google.gson.annotations.SerializedName
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addMalId
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
@@ -36,52 +35,52 @@ class AnimeONProvider : MainAPI() {
     )
 
     private data class SafeResult(
-        @SerializedName("id") val id: Int,
-        @SerializedName("titleUa") val titleUa: String,
-        @SerializedName("description") val description: String? = null,
-        @SerializedName("image") val image: Image,
-        @SerializedName("malId") val malId: Int? = null,
-        @SerializedName("rating") val rating: Double? = 0.0,
-        @SerializedName("status") val status: String? = null,
-        @SerializedName("type") val type: String? = null,
-        @SerializedName("genres") val genres: List<Genres>? = null,
-        @SerializedName("episodes") val episodes: Int? = null
+        val id: Int,
+        val titleUa: String,
+        val description: String? = null,
+        val image: Image,
+        val malId: Int? = null,
+        val rating: Double? = 0.0,
+        val status: String? = null,
+        val type: String? = null,
+        val genres: List<Genres>? = null,
+        val episodes: Int? = null
     )
 
     private data class SafeNewAnimeModel(
-        @SerializedName("results") val results: List<SafeResult>,
-        @SerializedName("totalCount") val totalCount: Int? = 0
+        val results: List<SafeResult>,
+        val totalCount: Int? = 0
     )
 
     private data class SafeSearchApiResponse(
-        @SerializedName("results") val results: List<SafeResult>,
-        @SerializedName("totalCount") val totalCount: Int? = 0
+        val results: List<SafeResult>,
+        val totalCount: Int? = 0
     )
 
     private data class SafeAnimeInfoModel(
-        @SerializedName("id") val id: Int,
-        @SerializedName("titleUa") val titleUa: String,
-        @SerializedName("titleEn") val titleEn: String? = null,
-        @SerializedName("description") val description: String? = null,
-        @SerializedName("image") val image: Image? = null,
-        @SerializedName("backgroundImage") val backgroundImage: String? = null,
-        @SerializedName("trailer") val trailer: String? = null,
-        @SerializedName("rating") val rating: Double? = 0.0,
-        @SerializedName("status") val status: String? = "completed",
-        @SerializedName("type") val type: String? = "tv",
-        @SerializedName("genres") val genres: List<Genres>? = null,
-        @SerializedName("episodes") val episodes: Int? = 0,
-        @SerializedName("episodeTime") val episodeTime: String? = "",
-        @SerializedName("releaseDate") val releaseDate: String? = null,
-        @SerializedName("malId") val malId: Int? = 0
+        val id: Int,
+        val titleUa: String,
+        val titleEn: String? = null,
+        val description: String? = null,
+        val image: Image? = null,
+        val backgroundImage: String? = null,
+        val trailer: String? = null,
+        val rating: Double? = 0.0,
+        val status: String? = "completed",
+        val type: String? = "tv",
+        val genres: List<Genres>? = null,
+        val episodes: Int? = 0,
+        val episodeTime: String? = "",
+        val releaseDate: String? = null,
+        val malId: Int? = 0
     )
 
     private data class SafeTranslationsResponse(
-        @SerializedName("translations") val translations: List<TranslationItem>
+        val translations: List<TranslationItem>
     )
 
     private data class SafePlayerEpisodes(
-        @SerializedName("episodes") val episodes: List<FundubEpisode>
+        val episodes: List<FundubEpisode>
     )
 
     private data class LocalResult(
@@ -259,7 +258,7 @@ class AnimeONProvider : MainAPI() {
             if (page != 1) return newHomePageResponse(request.name, emptyList())
             val currentDate = java.text.SimpleDateFormat("EEE MMM dd yyyy", java.util.Locale.ENGLISH).format(java.util.Date())
             val jsonText = fetchJsonOrNull("${request.data}$currentDate?withView=false") ?: return newHomePageResponse(request.name, emptyList())
-            
+
             val parsedJSON = AppUtils.parseJson<List<LocalResult>>(jsonText)
             return newHomePageResponse(request.name, parsedJSON.map {
                 newAnimeSearchResponse(it.titleUa, "anime/${it.id}", TvType.Anime) {
@@ -269,7 +268,7 @@ class AnimeONProvider : MainAPI() {
         }
         if (request.data.contains("seasons") && page != 1) return newHomePageResponse(emptyList())
         val jsonText = fetchJsonOrNull(if (request.data.contains("%d")) request.data.format(page) else request.data) ?: return newHomePageResponse(request.name, emptyList())
-        
+
         return if (!request.data.contains("seasons")) {
             val parsedJSON = AppUtils.parseJson<SafeNewAnimeModel>(jsonText)
             newHomePageResponse(request.name, parsedJSON.results.map {
@@ -405,10 +404,8 @@ class AnimeONProvider : MainAPI() {
                         }
                         if (ashdiSource != null) epPoster = getAshdiPoster(ashdiSource.videoUrl!!)
                     }
- 
-                    val dataJson = "[" + sources.joinToString(",") { source ->
-                        """{"translationName":"${source.translationName.replace("\"", "\\\"")}","playerName":"${source.playerName.replace("\"", "\\\"")}","videoUrl":${source.videoUrl?.let { "\"${it.replace("\"", "\\\"")}\"" } ?: "null"},"fileUrl":${source.fileUrl?.let { "\"${it.replace("\"", "\\\"")}\"" } ?: "null"}}"""
-                    } + "]"
+
+                    val dataJson = AppUtils.toJson(sources)
 
                     episodes.add(
                         newEpisode(dataJson).apply {
@@ -961,15 +958,14 @@ class AnimeONProvider : MainAPI() {
                         }
                     }
 
-                                        val contentUrlRegex = Regex("""(https?://s\.moonanime\.art/content/[^\s"'`]+)""")
+                    val contentUrlRegex = Regex("""(https?://s\.moonanime\.art/content/[^\s"'`]+)""")
                     val contentMatch = contentUrlRegex.find(decodedJs)?.groupValues?.get(1)
                     if (!contentMatch.isNullOrEmpty() && !contentMatch.contains(Regex("""\.(jpg|jpeg|png)$"""))) {
-                        val resolved = resolveMoonContent(contentMatch) 
+                        val resolved = resolveMoonContent(contentMatch)
                         if (!resolved.isNullOrEmpty()) {
                             return resolved
                         }
                     }
-
                 }
             }
         }
