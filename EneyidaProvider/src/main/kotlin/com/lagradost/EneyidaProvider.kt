@@ -27,7 +27,7 @@ class EneyidaProvider : MainAPI() {
     // Витягує JSON-рядок з JS-коду плеєра.
     // JSON може бути обгорнутий в одинарні АБО подвійні лапки:
     //   file: '[{"title":"1 сезон",...}]'   <- серіал (масив)
-    //   file: 'https://example.com/video.m3u8' <- фільм (пряме посилання)
+    //   file: '[{"title":"Укр. Дуб.","file":"url.m3u8"}]' <- фільм (масив озвучок)
     private fun extractFileValue(scriptHtml: String): String {
         // Знаходимо позицію ключа file: (з можливими пробілами)
         val keyRegex = Regex("""file\s*:\s*(['"])""")
@@ -149,18 +149,19 @@ class EneyidaProvider : MainAPI() {
                 val seasonNum = seasonTitle.replace(" сезон", "").trim().toIntOrNull()
 
                 // episodeMap: episodeTitle -> poster (беремо з першої доступної озвучки)
-                val episodeMap = linkedMapOf<String, String?>()
+                // Використовуємо String замість String? щоб уникнути nullable ітератора
+                val episodeMap = linkedMapOf<String, String>()
 
-                seasonItem.folder?.forEach { dub ->
-                    dub.folder?.forEach { episode ->
+                seasonItem.folder.orEmpty().forEach { dub ->
+                    dub.folder.orEmpty().forEach { episode ->
                         if (!episodeMap.containsKey(episode.title)) {
-                            episodeMap[episode.title] = episode.poster
+                            episodeMap[episode.title] = episode.poster ?: ""
                         }
                     }
                 }
 
                 // Створюємо одну кнопку на серію; всі URL озвучок передаємо в data
-                for ((episodeTitle, episodePoster) in episodeMap) {
+                episodeMap.forEach { (episodeTitle, episodePoster) ->
                     val episodeNum = episodeTitle.replace(" серія", "").trim().toIntOrNull()
 
                     // data формат: "seasonTitle|episodeTitle|playerUrl"
@@ -171,7 +172,7 @@ class EneyidaProvider : MainAPI() {
                             this.name = episodeTitle
                             this.season = seasonNum
                             this.episode = episodeNum
-                            this.posterUrl = episodePoster
+                            this.posterUrl = episodePoster.takeIf { it.isNotBlank() }
                             this.data = dataStr
                         }
                     )
@@ -217,23 +218,28 @@ class EneyidaProvider : MainAPI() {
         val playerRawJson = extractFileValue(scriptHtml)
 
         // Its film, parse one m3u8
+        // Для фільму JSON — масив озвучок: [{"title":"Укр. Дуб.","file":"url.m3u8","subtitle":"..."}]
+        // Кожен елемент кореня — озвучка з полем file (пряме посилання на m3u8)
         if (dataList.size == 2) {
-            val m3u8Url = playerRawJson
-            M3u8Helper.generateM3u8(
-                source = dataList[0],
-                streamUrl = m3u8Url.replace("https://", "http://"),
-                referer = "https://tortuga.wtf/"
-            ).dropLast(1).forEach(callback)
+            tryParseJson<List<PlayerJson>>(playerRawJson)?.forEach { dub ->
+                val fileUrl = dub.file ?: return@forEach
+                M3u8Helper.generateM3u8(
+                    source = dub.title,
+                    streamUrl = fileUrl,
+                    referer = "https://tortuga.wtf/"
+                ).dropLast(1).forEach(callback)
 
-            val subtitleUrl = subtitleRegex.find(scriptHtml)?.groupValues?.get(1) ?: ""
-
-            if (subtitleUrl.isBlank()) return true
-            subtitleCallback.invoke(
-                newSubtitleFile(
-                    subtitleUrl.substringAfterLast("[").substringBefore("]"),
-                    subtitleUrl.substringAfter("]")
-                )
-            )
+                dub.subtitle?.takeIf { it.isNotBlank() }?.let { subtitleRaw ->
+                    subtitleRaw.indexOf(']').takeIf { it > 0 }?.let { endIndex ->
+                        subtitleCallback(
+                            newSubtitleFile(
+                                subtitleRaw.substring(subtitleRaw.lastIndexOf('[') + 1, endIndex),
+                                subtitleRaw.substring(endIndex + 1)
+                            )
+                        )
+                    }
+                }
+            }
             return true
         }
 
@@ -248,15 +254,16 @@ class EneyidaProvider : MainAPI() {
         tryParseJson<List<PlayerJson>>(playerRawJson)?.forEach { seasonItem ->
             if (seasonItem.title != targetSeason) return@forEach
 
-            seasonItem.folder?.forEach { dub ->
+            seasonItem.folder.orEmpty().forEach { dub ->
                 val dubTitle = dub.title // "Цікава Ідея", "MGG", "HDrezka Studio" ...
 
-                dub.folder
-                    ?.filter { it.title == targetEpisode && !it.file.isNullOrBlank() }
-                    ?.forEach { episode ->
+                dub.folder.orEmpty()
+                    .filter { it.title == targetEpisode && !it.file.isNullOrBlank() }
+                    .forEach { episode ->
+                        val fileUrl = episode.file ?: return@forEach
                         M3u8Helper.generateM3u8(
                             source = dubTitle,
-                            streamUrl = episode.file!!,
+                            streamUrl = fileUrl,
                             referer = "https://tortuga.wtf/"
                         ).dropLast(1).forEach(callback)
 
