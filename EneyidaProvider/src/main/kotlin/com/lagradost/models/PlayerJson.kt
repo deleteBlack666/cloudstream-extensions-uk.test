@@ -3,7 +3,10 @@ package com.lagradost.models
 data class PlayerJson(
     val title: String,
     val folder: List<DubFolder>? = null,
-    val file: String? = null
+    val file: String? = null,
+    val id: String? = null,
+    val poster: String? = null,
+    val subtitle: String? = null
 )
 
 data class DubFolder(
