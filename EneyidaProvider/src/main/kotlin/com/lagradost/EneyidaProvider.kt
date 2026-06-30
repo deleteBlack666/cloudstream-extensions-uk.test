@@ -24,30 +24,27 @@ class EneyidaProvider : MainAPI() {
         TvType.Anime,
     )
 
-    // Витягує JSON-рядок з JS-коду плеєра.
-    // JSON може бути обгорнутий в одинарні АБО подвійні лапки:
-    //   file: '[{"title":"1 сезон",...}]'   <- серіал (масив)
-    //   file: '[{"title":"Укр. Дуб.","file":"url.m3u8"}]' <- фільм (масив озвучок)
+    // Витягує значення поля file: з JS-коду плеєра.
+    // Підтримує три формати:
+    //   1. file: '[{"title":"1 сезон","folder":[...]}]'  — серіал (масив у одинарних лапках)
+    //   2. file: '[{"title":"Укр. Дуб.","file":"url"}]'  — фільм з озвучками (масив)
+    //   3. file: "https://example.com/video.m3u8"         — пряме посилання (без масиву)
     private fun extractFileValue(scriptHtml: String): String {
-        // Знаходимо позицію ключа file: (з можливими пробілами)
         val keyRegex = Regex("""file\s*:\s*(['"])""")
         val match = keyRegex.find(scriptHtml) ?: return ""
-        val quote = match.groupValues[1] // одинарна або подвійна лапка
-        val start = match.range.last + 1 // індекс після відкриваючої лапки
+        val quote = match.groupValues[1]
+        val start = match.range.last + 1
 
-        // Шукаємо закриваючу лапку тієї ж самої рядку,
-        // пропускаючи екрановані послідовності (\' або \")
         var i = start
         val sb = StringBuilder()
         while (i < scriptHtml.length) {
             val c = scriptHtml[i]
             if (c == '\\' && i + 1 < scriptHtml.length) {
-                // Екранований символ — пропускаємо обидва
                 sb.append(scriptHtml[i + 1])
                 i += 2
                 continue
             }
-            if (c.toString() == quote) break // Кінець рядка
+            if (c.toString() == quote) break
             sb.append(c)
             i++
         }
@@ -116,7 +113,7 @@ class EneyidaProvider : MainAPI() {
         val year = fullInfo[0].select("a").text().toIntOrNull()
         val playerUrl = document.select(".tabs_b.visible iframe").attr("src")
 
-        val tvType = if (tags.contains("фільм") or tags.contains("мультьфільм") or playerUrl.contains("/vod/")) TvType.Movie else TvType.TvSeries
+        val tvType = if (tags.contains("фільм") or tags.contains("мультьфільм") or tags.contains("аніме") or playerUrl.contains("/vod/")) TvType.Movie else TvType.TvSeries
         val description = document.selectFirst(".full_content-desc p")?.text()?.trim()
         val trailer = document.selectFirst("div#trailer_place iframe")?.attr("src").toString()
         val rating = document.selectFirst(".r_kp span, .r_imdb span")?.text()
@@ -217,24 +214,53 @@ class EneyidaProvider : MainAPI() {
         val scriptHtml = app.get(dataList.last()).document.select("script").html()
         val playerRawJson = extractFileValue(scriptHtml)
 
-        // Its film, parse one m3u8
-        // Для фільму JSON — масив озвучок: [{"title":"Укр. Дуб.","file":"url.m3u8","subtitle":"..."}]
-        // Кожен елемент кореня — озвучка з полем file (пряме посилання на m3u8)
+        // Its film, parse m3u8
+        // Три можливих формати для фільму/аніме:
+        //   А) Масив озвучок: [{"title":"Укр. Дуб.","file":"url.m3u8","subtitle":"..."}]
+        //   Б) Пряме посилання: "https://example.com/video.m3u8" (не JSON)
         if (dataList.size == 2) {
-            tryParseJson<List<PlayerJson>>(playerRawJson)?.forEach { dub ->
-                val fileUrl = dub.file ?: return@forEach
-                M3u8Helper.generateM3u8(
-                    source = dub.title,
-                    streamUrl = fileUrl,
-                    referer = "https://tortuga.wtf/"
-                ).dropLast(1).forEach(callback)
+            val parsedDubs = tryParseJson<List<PlayerJson>>(playerRawJson)
 
-                dub.subtitle?.takeIf { it.isNotBlank() }?.let { subtitleRaw ->
-                    subtitleRaw.indexOf(']').takeIf { it > 0 }?.let { endIndex ->
+            if (parsedDubs != null) {
+                // Формат А — масив озвучок, кожна з полем file
+                parsedDubs.forEach { dub ->
+                    val fileUrl = dub.file ?: return@forEach
+                    M3u8Helper.generateM3u8(
+                        source = dub.title,
+                        streamUrl = fileUrl,
+                        referer = "https://tortuga.wtf/"
+                    ).dropLast(1).forEach(callback)
+
+                    dub.subtitle?.takeIf { it.isNotBlank() }?.let { subtitleRaw ->
+                        subtitleRaw.indexOf(']').takeIf { it > 0 }?.let { endIndex ->
+                            subtitleCallback(
+                                newSubtitleFile(
+                                    subtitleRaw.substring(subtitleRaw.lastIndexOf('[') + 1, endIndex),
+                                    subtitleRaw.substring(endIndex + 1)
+                                )
+                            )
+                        }
+                    }
+                }
+            } else {
+                // Формат Б — пряме посилання (аніме, деякі фільми)
+                // playerRawJson містить голий URL m3u8
+                if (playerRawJson.isNotBlank()) {
+                    M3u8Helper.generateM3u8(
+                        source = dataList[0],
+                        streamUrl = playerRawJson,
+                        referer = "https://tortuga.wtf/"
+                    ).dropLast(1).forEach(callback)
+                }
+
+                // Субтитри для прямого формату — окремий ключ subtitle: "..." в JS
+                val subtitleUrl = subtitleRegex.find(scriptHtml)?.groupValues?.get(1) ?: ""
+                if (subtitleUrl.isNotBlank()) {
+                    subtitleUrl.indexOf(']').takeIf { it > 0 }?.let { endIndex ->
                         subtitleCallback(
                             newSubtitleFile(
-                                subtitleRaw.substring(subtitleRaw.lastIndexOf('[') + 1, endIndex),
-                                subtitleRaw.substring(endIndex + 1)
+                                subtitleUrl.substring(subtitleUrl.lastIndexOf('[') + 1, endIndex),
+                                subtitleUrl.substring(endIndex + 1)
                             )
                         )
                     }
