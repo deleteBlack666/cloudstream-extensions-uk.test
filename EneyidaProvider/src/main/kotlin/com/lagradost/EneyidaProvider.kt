@@ -24,7 +24,36 @@ class EneyidaProvider : MainAPI() {
         TvType.Anime,
     )
 
-    private val fileRegex = "file\\s*:\\s*['\"]([^'\"]+)['\"]".toRegex()
+    // Витягує JSON-рядок з JS-коду плеєра.
+    // JSON може бути обгорнутий в одинарні АБО подвійні лапки:
+    //   file: '[{"title":"1 сезон",...}]'   <- серіал (масив)
+    //   file: 'https://example.com/video.m3u8' <- фільм (пряме посилання)
+    private fun extractFileValue(scriptHtml: String): String {
+        // Знаходимо позицію ключа file: (з можливими пробілами)
+        val keyRegex = Regex("""file\s*:\s*(['"])""")
+        val match = keyRegex.find(scriptHtml) ?: return ""
+        val quote = match.groupValues[1] // одинарна або подвійна лапка
+        val start = match.range.last + 1 // індекс після відкриваючої лапки
+
+        // Шукаємо закриваючу лапку тієї ж самої рядку,
+        // пропускаючи екрановані послідовності (\' або \")
+        var i = start
+        val sb = StringBuilder()
+        while (i < scriptHtml.length) {
+            val c = scriptHtml[i]
+            if (c == '\\' && i + 1 < scriptHtml.length) {
+                // Екранований символ — пропускаємо обидва
+                sb.append(scriptHtml[i + 1])
+                i += 2
+                continue
+            }
+            if (c.toString() == quote) break // Кінець рядка
+            sb.append(c)
+            i++
+        }
+        return sb.toString()
+    }
+
     private val subtitleRegex = "subtitle\\s*:\\s*['\"]([^'\"]+)['\"]".toRegex()
 
     // Sections
@@ -56,7 +85,6 @@ class EneyidaProvider : MainAPI() {
         return newMovieSearchResponse(title, href, TvType.Movie) {
             this.posterUrl = posterUrl
         }
-
     }
 
     override suspend fun quickSearch(query: String): List<SearchResponse> = search(query)
@@ -102,24 +130,54 @@ class EneyidaProvider : MainAPI() {
         // Parse Episodes as Series
         return if (tvType == TvType.TvSeries) {
             val episodes = mutableListOf<Episode>()
-            val playerRawJson = fileRegex.find(app.get(playerUrl).document.select("script").html())?.groupValues?.get(1) ?: ""
 
-            tryParseJson<List<PlayerJson>>(playerRawJson)?.map { dub -> // Dubs
-                for (season in dub.folder) {                                     // Seasons
-                    for (episode in season.folder) {                              // Episodes
+            val scriptHtml = app.get(playerUrl).document.select("script").html()
+            val playerRawJson = extractFileValue(scriptHtml)
 
-                        episodes.add(
-                            newEpisode("${season.title}|${episode.title}|$playerUrl") {
-                                this.name = episode.title
-                                this.season = season.title.replace(" сезон","").toIntOrNull()
-                                this.episode = episode.title.replace(" серія","").toIntOrNull()
-                                this.posterUrl = episode.poster
-                                this.data = "${season.title}|${episode.title}|$playerUrl"
-                            }
-                        )
+            // Реальна ієрархія JSON:
+            // Корінь (List<PlayerJson>) -> Сезон (title: "1 сезон", folder: List<DubFolder>)
+            //   -> Озвучка (title: "Цікава Ідея", folder: List<EpisodeFolder>)
+            //     -> Серія (title: "1 серія", file: "url.m3u8")
+            //
+            // Щоб уникнути дублювання: для кожної серії всередині сезону
+            // створюємо одну кнопку в UI (ключ = seasonTitle|episodeTitle),
+            // а всі озвучки зберігаємо у data через "|dub1_url|dub2_url|..."
+            // (розпарсюємо у loadLinks).
+
+            tryParseJson<List<PlayerJson>>(playerRawJson)?.forEach { seasonItem ->
+                val seasonTitle = seasonItem.title // "1 сезон", "2 сезон" ...
+                val seasonNum = seasonTitle.replace(" сезон", "").trim().toIntOrNull()
+
+                // episodeMap: episodeTitle -> poster (беремо з першої доступної озвучки)
+                val episodeMap = linkedMapOf<String, String?>()
+
+                seasonItem.folder?.forEach { dub ->
+                    dub.folder?.forEach { episode ->
+                        if (!episodeMap.containsKey(episode.title)) {
+                            episodeMap[episode.title] = episode.poster
+                        }
                     }
                 }
+
+                // Створюємо одну кнопку на серію; всі URL озвучок передаємо в data
+                for ((episodeTitle, episodePoster) in episodeMap) {
+                    val episodeNum = episodeTitle.replace(" серія", "").trim().toIntOrNull()
+
+                    // data формат: "seasonTitle|episodeTitle|playerUrl"
+                    val dataStr = "$seasonTitle|$episodeTitle|$playerUrl"
+
+                    episodes.add(
+                        newEpisode(dataStr) {
+                            this.name = episodeTitle
+                            this.season = seasonNum
+                            this.episode = episodeNum
+                            this.posterUrl = episodePoster
+                            this.data = dataStr
+                        }
+                    )
+                }
             }
+
             newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
                 this.posterUrl = poster
                 this.backgroundPosterUrl = "$mainUrl$banner"
@@ -155,16 +213,19 @@ class EneyidaProvider : MainAPI() {
     ): Boolean {
         val dataList = data.split("|")
 
+        val scriptHtml = app.get(dataList.last()).document.select("script").html()
+        val playerRawJson = extractFileValue(scriptHtml)
+
         // Its film, parse one m3u8
-        if(dataList.size == 2){
-            val m3u8Url = fileRegex.find(app.get(dataList[1]).document.select("script").html())?.groupValues?.get(1) ?: ""
+        if (dataList.size == 2) {
+            val m3u8Url = playerRawJson
             M3u8Helper.generateM3u8(
                 source = dataList[0],
                 streamUrl = m3u8Url.replace("https://", "http://"),
                 referer = "https://tortuga.wtf/"
             ).dropLast(1).forEach(callback)
 
-            val subtitleUrl = subtitleRegex.find(app.get(dataList[1]).document.select("script").html())?.groupValues?.get(1) ?: ""
+            val subtitleUrl = subtitleRegex.find(scriptHtml)?.groupValues?.get(1) ?: ""
 
             if (subtitleUrl.isBlank()) return true
             subtitleCallback.invoke(
@@ -176,24 +237,28 @@ class EneyidaProvider : MainAPI() {
             return true
         }
 
-        val playerRawJson = fileRegex.find(app.get(dataList[2]).document.select("script").html())?.groupValues?.get(1) ?: ""
+        // dataList[0] = seasonTitle ("1 сезон")
+        // dataList[1] = episodeTitle ("1 серія")
+        // dataList[2] = playerUrl
+        val targetSeason = dataList[0]
+        val targetEpisode = dataList[1]
 
-        tryParseJson<List<PlayerJson>>(playerRawJson)?.forEach { level1Item ->
-            val isSeasonFirst = level1Item.title.contains("сезон", ignoreCase = true)
+        // Ієрархія: Сезон -> Озвучка -> Серія
+        // Проходимо всі озвучки для обраної серії і генеруємо окремий ExtractorLink на кожну
+        tryParseJson<List<PlayerJson>>(playerRawJson)?.forEach { seasonItem ->
+            if (seasonItem.title != targetSeason) return@forEach
 
-            val (dubTitle, seasonList) = if (isSeasonFirst) {
-                level1Item.title to level1Item.folder // Сценарій А: Season -> Dub -> Episode
-            } else {
-                level1Item.title to level1Item.folder // Сценарій Б: Dub -> Season -> Episode
-            }
+            seasonItem.folder?.forEach { dub ->
+                val dubTitle = dub.title // "Цікава Ідея", "MGG", "HDrezka Studio" ...
 
-            seasonList.forEach { season ->
-                val sourceTitle = if (isSeasonFirst) season.title else dubTitle
-
-                season.folder
-                    .filter { it.title == dataList[1] && !it.file.isNullOrBlank() }
-                    .forEach { episode ->
-                        M3u8Helper.generateM3u8(sourceTitle, episode.file, "https://tortuga.wtf/").dropLast(1).forEach(callback)
+                dub.folder
+                    ?.filter { it.title == targetEpisode && !it.file.isNullOrBlank() }
+                    ?.forEach { episode ->
+                        M3u8Helper.generateM3u8(
+                            source = dubTitle,
+                            streamUrl = episode.file!!,
+                            referer = "https://tortuga.wtf/"
+                        ).dropLast(1).forEach(callback)
 
                         episode.subtitle?.takeIf { it.isNotBlank() }?.let { subtitleRaw ->
                             subtitleRaw.indexOf(']').takeIf { it > 0 }?.let { endIndex ->
