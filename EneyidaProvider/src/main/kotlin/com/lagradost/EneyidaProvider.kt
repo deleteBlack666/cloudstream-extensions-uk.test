@@ -25,11 +25,11 @@ class EneyidaProvider : MainAPI() {
     )
 
     // Витягує значення поля file: з JS-коду плеєра.
-    // Підтримує три формати:
-    //   1. file: '[{"title":"1 сезон","folder":[...]}]'  — серіал Сезон→Озвучка→Серія
+    // Підтримує всі формати плеєра hdvbua.pro:
+    //   1. file: '[{"title":"1 сезон","folder":[...]}]'         — серіал Сезон→Озвучка→Серія
     //   2. file: '[{"title":"QTV","folder":[{"title":"1 сезон"...}]}]' — серіал Озвучка→Сезон→Серія
-    //   3. file: '[{"title":"Укр. Дуб.","file":"url"}]'  — фільм з озвучками
-    //   4. file: "https://example.com/video.m3u8"         — пряме посилання
+    //   3. file: '[{"title":"Укр. Дуб.","file":"url.m3u8"}]'   — фільм з масивом озвучок
+    //   4. file: "https://example.com/video.m3u8"               — пряме посилання (без JSON)
     private fun extractFileValue(scriptHtml: String): String {
         val keyRegex = Regex("""file\s*:\s*(['"])""")
         val match = keyRegex.find(scriptHtml) ?: return ""
@@ -114,10 +114,6 @@ class EneyidaProvider : MainAPI() {
         val year = fullInfo[0].select("a").text().toIntOrNull()
         val playerUrl = document.select(".tabs_b.visible iframe").attr("src")
 
-        // Тип визначаємо лише по жанрах "фільм"/"мультфільм" та /vod/ в URL плеєра.
-        // "аніме" може бути і серіалом (Наруто) і фільмом (Хлопчик і Чапля),
-        // тому реальний тип визначається нижче по структурі JSON плеєра.
-        val isDefinitelyMovie = tags.contains("фільм") or tags.contains("мультьфільм") or playerUrl.contains("/vod/")
         val description = document.selectFirst(".full_content-desc p")?.text()?.trim()
         val trailer = document.selectFirst("div#trailer_place iframe")?.attr("src").toString()
         val rating = document.selectFirst(".r_kp span, .r_imdb span")?.text()
@@ -127,27 +123,29 @@ class EneyidaProvider : MainAPI() {
             it.toSearchResponse()
         }
 
-        // Завантажуємо плеєр і розбираємо JSON щоб зрозуміти реальну структуру
+        // Завантажуємо плеєр і розбираємо JSON щоб зрозуміти реальну структуру.
+        // Тип контенту визначаємо виключно по JSON, а не по жанровому тегу:
+        // "аніме" може бути і серіалом (Наруто) і фільмом (Хлопчик і Чапля).
         val scriptHtml = app.get(playerUrl).document.select("script").html()
         val playerRawJson = extractFileValue(scriptHtml)
         val parsedJson = tryParseJson<List<PlayerJson>>(playerRawJson)
 
-        // Визначаємо реальний тип контенту по структурі JSON:
-        // - якщо JSON не парситься -> пряме посилання -> фільм
-        // - якщо перший елемент має file (не folder) -> масив озвучок фільму -> фільм
-        // - якщо перший елемент має folder і перший підрівень містить "сезон" -> серіал (Сезон→Озвучка→Серія)
-        // - якщо перший елемент має folder і перший підрівень містить "сезон" в folder[0].folder -> серіал (Озвучка→Сезон→Серія)
-        // - якщо isDefinitelyMovie -> фільм
+        // Визначення типу по структурі JSON:
+        // parsedJson == null               -> пряме посилання на m3u8 -> фільм
+        // first.file != null               -> масив озвучок фільму -> фільм
+        // "сезон" є хоч де у 2 рівнях     -> серіал
+        // /vod/ в playerUrl або жанр фільм -> фільм (гарантовано)
         val firstItem = parsedJson?.firstOrNull()
         val firstSubItem = firstItem?.folder?.firstOrNull()
+        val isDefinitelyMovie = tags.contains("фільм") or tags.contains("мультьфільм") or playerUrl.contains("/vod/")
 
         val tvType = when {
             isDefinitelyMovie -> TvType.Movie
-            parsedJson == null -> TvType.Movie                          // пряме посилання
+            parsedJson == null -> TvType.Movie
             firstItem?.file != null && firstItem.folder == null -> TvType.Movie  // масив озвучок фільму
-            firstSubItem?.title?.contains("сезон", ignoreCase = true) == true -> TvType.TvSeries  // Озвучка→Сезон
-            firstItem?.title?.contains("сезон", ignoreCase = true) == true -> TvType.TvSeries     // Сезон→Озвучка
-            firstSubItem?.folder != null -> TvType.TvSeries            // є вкладені епізоди -> серіал
+            firstItem?.title?.contains("сезон", ignoreCase = true) == true -> TvType.TvSeries   // Формат А
+            firstSubItem?.title?.contains("сезон", ignoreCase = true) == true -> TvType.TvSeries // Формат Б
+            firstSubItem?.folder != null -> TvType.TvSeries  // є третій рівень -> серіал
             else -> TvType.Movie
         }
 
@@ -157,14 +155,13 @@ class EneyidaProvider : MainAPI() {
             val episodes = mutableListOf<Episode>()
 
             // Визначаємо ієрархію JSON:
-            // Формат А: Сезон → Озвучка → Серія  (title першого = "1 сезон")
-            //   [{"title":"1 сезон","folder":[{"title":"Цікава Ідея","folder":[{"title":"1 серія","file":"url"}]}]}]
-            // Формат Б: Озвучка → Сезон → Серія  (title першого = назва озвучки, напр. "QTV")
+            // Формат А: Сезон → Озвучка → Серія  (перший title = "1 сезон")
+            //   [{"title":"1 сезон","folder":[{"title":"QTV","folder":[{"title":"1 серія","file":"url"}]}]}]
+            // Формат Б: Озвучка → Сезон → Серія  (перший title = назва озвучки)
             //   [{"title":"QTV","folder":[{"title":"1 сезон","folder":[{"title":"1 серія","file":"url"}]}]}]
             //
-            // Щоб уникнути дублювання серій в UI: для кожної серії в кожному сезоні
-            // створюємо одну кнопку, а всі озвучки парсяться в loadLinks.
-
+            // Щоб уникнути дублювання серій в UI — одна кнопка на серію,
+            // всі озвучки для неї парсяться в loadLinks.
             val isSeasonFirst = firstItem?.title?.contains("сезон", ignoreCase = true) == true
 
             if (isSeasonFirst) {
@@ -198,7 +195,6 @@ class EneyidaProvider : MainAPI() {
                 }
             } else {
                 // Формат Б: Озвучка → Сезон → Серія
-                // Беремо перший дубляж для побудови списку серій
                 parsedJson?.forEach { dubItem ->
                     dubItem.folder.orEmpty().forEach { seasonItem ->
                         val seasonTitle = seasonItem.title
@@ -214,7 +210,7 @@ class EneyidaProvider : MainAPI() {
                         episodeMap.forEach { (episodeTitle, episodePoster) ->
                             val episodeNum = episodeTitle.replace(" серія", "").trim().toIntOrNull()
                             val dataStr = "$seasonTitle|$episodeTitle|$playerUrl"
-                            // Додаємо лише якщо ще немає такої серії (щоб не дублювати між озвучками)
+                            // Додаємо лише якщо ще немає (уникнення дублів між озвучками)
                             if (episodes.none { it.data == dataStr }) {
                                 episodes.add(
                                     newEpisode(dataStr) {
@@ -271,20 +267,21 @@ class EneyidaProvider : MainAPI() {
 
         // Its film, parse m3u8
         // Три можливих формати для фільму/аніме:
-        //   А) Масив озвучок: [{"title":"Укр. Дуб.","file":"url.m3u8","subtitle":"..."}]
+        //   А) Масив озвучок: [{"title":"Укр. Дуб.","file":"url.m3u8","subtitle":"[UA]url.vtt"}]
         //   Б) Пряме посилання: "https://example.com/video.m3u8" (не JSON)
         if (dataList.size == 2) {
             val parsedDubs = tryParseJson<List<PlayerJson>>(playerRawJson)
 
             if (parsedDubs != null && parsedDubs.firstOrNull()?.file != null) {
                 // Формат А — масив озвучок, кожна з полем file
+                // ВАЖЛИВО: для фільмів НЕ робимо dropLast(1) — це прибирає аудіо-трек!
                 parsedDubs.forEach { dub ->
                     val fileUrl = dub.file ?: return@forEach
                     M3u8Helper.generateM3u8(
                         source = dub.title,
                         streamUrl = fileUrl,
                         referer = "https://tortuga.wtf/"
-                    ).dropLast(1).forEach(callback)
+                    ).forEach(callback)
 
                     dub.subtitle?.takeIf { it.isNotBlank() }?.let { subtitleRaw ->
                         subtitleRaw.indexOf(']').takeIf { it > 0 }?.let { endIndex ->
@@ -299,12 +296,13 @@ class EneyidaProvider : MainAPI() {
                 }
             } else {
                 // Формат Б — пряме посилання (аніме-фільми, деякі інші)
+                // ВАЖЛИВО: для фільмів НЕ робимо dropLast(1) — це прибирає аудіо-трек!
                 if (playerRawJson.isNotBlank()) {
                     M3u8Helper.generateM3u8(
                         source = dataList[0],
                         streamUrl = playerRawJson,
                         referer = "https://tortuga.wtf/"
-                    ).dropLast(1).forEach(callback)
+                    ).forEach(callback)
                 }
 
                 // Субтитри для прямого формату — окремий ключ subtitle: "..." в JS
@@ -330,13 +328,11 @@ class EneyidaProvider : MainAPI() {
         val targetEpisode = dataList[1]
 
         val parsedJson = tryParseJson<List<PlayerJson>>(playerRawJson) ?: return true
-        val firstItem = parsedJson.firstOrNull()
-        val isSeasonFirst = firstItem?.title?.contains("сезон", ignoreCase = true) == true
+        val isSeasonFirst = parsedJson.firstOrNull()?.title?.contains("сезон", ignoreCase = true) == true
 
-        // Ієрархія: Сезон -> Озвучка -> Серія (Дім Дракона тощо)
-        // Проходимо всі озвучки для обраної серії і генеруємо окремий ExtractorLink на кожну
         if (isSeasonFirst) {
             // Формат А: Сезон → Озвучка → Серія
+            // Проходимо всі озвучки для обраної серії і генеруємо окремий ExtractorLink на кожну
             parsedJson.forEach { seasonItem ->
                 if (seasonItem.title != targetSeason) return@forEach
                 seasonItem.folder.orEmpty().forEach { dub ->
