@@ -6,6 +6,8 @@ import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.ExtractorLinkType
+import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.M3u8Helper
 import org.jsoup.nodes.Element
 
@@ -273,15 +275,21 @@ class EneyidaProvider : MainAPI() {
             val parsedDubs = tryParseJson<List<PlayerJson>>(playerRawJson)
 
             if (parsedDubs != null && parsedDubs.firstOrNull()?.file != null) {
-                // Формат А — масив озвучок, кожна з полем file
-                // ВАЖЛИВО: для фільмів НЕ робимо dropLast(1) — це прибирає аудіо-трек!
+                // Формат А — масив озвучок фільму, кожна з полем file (мастер m3u8).
+                // Передаємо мастер-плейліст напряму як ExtractorLink — НЕ через M3u8Helper,
+                // бо M3u8Helper розбиває мастер на окремі якості (-v відео без аудіо).
                 parsedDubs.forEach { dub ->
                     val fileUrl = dub.file ?: return@forEach
-                    M3u8Helper.generateM3u8(
-                        source = dub.title,
-                        streamUrl = fileUrl,
-                        referer = "https://tortuga.wtf/"
-                    ).forEach(callback)
+                    callback.invoke(
+                        ExtractorLink(
+                            source = name,
+                            name = dub.title,
+                            url = fileUrl,
+                            referer = "https://tortuga.wtf/",
+                            quality = Qualities.Unknown.value,
+                            type = ExtractorLinkType.M3U8
+                        )
+                    )
 
                     dub.subtitle?.takeIf { it.isNotBlank() }?.let { subtitleRaw ->
                         subtitleRaw.indexOf(']').takeIf { it > 0 }?.let { endIndex ->
@@ -295,14 +303,19 @@ class EneyidaProvider : MainAPI() {
                     }
                 }
             } else {
-                // Формат Б — пряме посилання (аніме-фільми, деякі інші)
-                // ВАЖЛИВО: для фільмів НЕ робимо dropLast(1) — це прибирає аудіо-трек!
+                // Формат Б — пряме посилання (аніме-фільми, деякі інші).
+                // Також передаємо мастер напряму, без розбивки M3u8Helper.
                 if (playerRawJson.isNotBlank()) {
-                    M3u8Helper.generateM3u8(
-                        source = dataList[0],
-                        streamUrl = playerRawJson,
-                        referer = "https://tortuga.wtf/"
-                    ).forEach(callback)
+                    callback.invoke(
+                        ExtractorLink(
+                            source = name,
+                            name = dataList[0],
+                            url = playerRawJson,
+                            referer = "https://tortuga.wtf/",
+                            quality = Qualities.Unknown.value,
+                            type = ExtractorLinkType.M3U8
+                        )
+                    )
                 }
 
                 // Субтитри для прямого формату — окремий ключ subtitle: "..." в JS
