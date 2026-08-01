@@ -1097,11 +1097,13 @@ private suspend fun getMoonPoster(iframeUrl: String): String? {
 
         if (html.isNotEmpty()) {
             val atobRegex = Regex("""atob\s*\(\s*["']([^"']+)["']\s*\)""")
-            val atobMatch = atobRegex.find(html)?.groupValues?.get(1)
+            var decodedJs = ""
+            for (m in atobRegex.findAll(html)) {
+                val d = moonOuterDecode(m.groupValues[1])
+                if (d.contains("_0xd") || d.contains("file")) { decodedJs = d; break }
+            }
 
-            if (!atobMatch.isNullOrEmpty()) {
-                val decodedJs = moonOuterDecode(atobMatch)
-                if (decodedJs.isNotEmpty()) {
+            if (decodedJs.isNotEmpty()) {
                     val keyRegex = Regex("""var\s+k\s*=\s*["']([^"']+)["']""")
                     val xorKey = keyRegex.find(decodedJs)?.groupValues?.get(1)
 
