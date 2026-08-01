@@ -1,5 +1,6 @@
 package com.lagradost
 
+import android.util.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addMalId
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
@@ -17,6 +18,8 @@ class AnimeONProvider : MainAPI() {
     override val hasQuickSearch = true
     override val hasDownloadSupport = true
 
+private val TAG = "AnimeON"
+    
     override fun getVideoInterceptor(extractorLink: ExtractorLink): okhttp3.Interceptor {
         return okhttp3.Interceptor { chain ->
             val request = chain.request()
@@ -279,52 +282,7 @@ class AnimeONProvider : MainAPI() {
         }
     }
 
-    private suspend fun getMoonPoster(iframeUrl: String): String? {
-        if (!iframeUrl.contains("/iframe/")) return null
-
-        val cleanUrl = if (iframeUrl.contains("player=")) {
-            iframeUrl
-        } else {
-            "$iframeUrl${if (iframeUrl.contains("?")) "&" else "?"}player=animeon.club"
-        }
-
-        return try {
-            val cookieResponse = app.get(
-                "https://moonanime.art/",
-                headers = mapOf(
-                    "User-Agent" to userAgent,
-                    "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                    "Accept-Language" to "uk-UA,uk;q=0.9",
-                ),
-                cacheTime = 0
-            )
-            val cookies = cookieResponse.cookies
-
-            val html = app.get(cleanUrl, headers = mapOf(
-                "User-Agent"                to userAgent,
-                "Accept"                    to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-                "Accept-Language"           to "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
-                "Referer"                   to "https://animeon.club/",
-                "X-Requested-With"          to "mark.via.gp",
-                "Sec-Fetch-Site"            to "none",
-                "Sec-Fetch-Mode"            to "navigate",
-                "Sec-Fetch-User"            to "?1",
-                "Sec-Fetch-Dest"            to "document",
-                "Upgrade-Insecure-Requests" to "1"
-            ), cookies = cookies, cacheTime = 0).text
-
-            val atobMatch = Regex("""atob\s*\(\s*["']([^"']+)["']\s*\)""")
-                .find(html)?.groupValues?.get(1) ?: return null
-
-            val decodedJs = moonOuterDecode(atobMatch)
-            if (decodedJs.isEmpty()) return null
-
-            Regex("""poster\s*:\s*["'](https?://[^"']+)["']""")
-                .find(decodedJs)?.groupValues?.get(1)
-        } catch (e: Exception) {
-            null
-        }
-    }
+    
     private suspend fun resolveMoonContent(contentUrl: String): String? {
         return try {
             val cookieResponse = app.get(
