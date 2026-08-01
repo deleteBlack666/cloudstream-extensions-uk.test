@@ -283,14 +283,10 @@ private val TAG = "AnimeON"
     }
 
 private suspend fun getMoonPoster(iframeUrl: String): String? {
-        if (!iframeUrl.contains("/iframe/")) {
-            Log.d(TAG, "getMoonPoster: НЕ iframe: $iframeUrl")
-            return null
-        }
+        if (!iframeUrl.contains("/iframe/")) return null
 
         val cleanUrl = if (iframeUrl.contains("player=")) iframeUrl
             else "$iframeUrl${if (iframeUrl.contains("?")) "&" else "?"}player=animeon.club"
-        Log.d(TAG, "getMoonPoster: запит $cleanUrl")
 
         return try {
             val html = app.get(cleanUrl, headers = mapOf(
@@ -306,28 +302,31 @@ private suspend fun getMoonPoster(iframeUrl: String): String? {
                 "Upgrade-Insecure-Requests" to "1"
             ), cacheTime = 0).text
 
-            Log.d(TAG, "getMoonPoster: HTML len=${html.length}")
+            if (html.isEmpty()) return null
 
             val atobMatch = Regex("""atob\s*\(\s*["']([^"']+)["']\s*\)""")
-                .find(html)?.groupValues?.get(1)
-            Log.d(TAG, "getMoonPoster: atob=${if (atobMatch != null) "OK(${atobMatch.length})" else "NULL"}")
-
-            if (atobMatch.isNullOrEmpty()) return null
+                .find(html)?.groupValues?.get(1) ?: return null
 
             val decodedJs = moonOuterDecode(atobMatch)
-            Log.d(TAG, "getMoonPoster: decoded len=${decodedJs.length} start=${decodedJs.take(150)}")
-
             if (decodedJs.isEmpty()) return null
 
-            val poster = Regex("""poster\s*:\s*["'](https?://[^"']+)["']""")
+            // 1. Спрямований пошук прямого URL
+            val directPoster = Regex("""poster\s*:\s*["'](https?://[^"']+)["']""")
                 .find(decodedJs)?.groupValues?.get(1)
-            Log.d(TAG, "getMoonPoster: poster=$poster")
-            poster
+            if (directPoster != null) return directPoster
+
+            // 2. Poster зашифрований через _0xd("...")
+            val xorKey = Regex("""var\s+k\s*=\s*["']([^"']+)["']""")
+                .find(decodedJs)?.groupValues?.get(1) ?: return null
+
+            val posterEnc = Regex("""poster\s*:\s*_0xd\s*\(\s*["']([^"']+)["']\s*\)""")
+                .find(decodedJs)?.groupValues?.get(1) ?: return null
+
+            moonDecrypt(posterEnc, xorKey).takeIf { it.startsWith("http") }
         } catch (e: Exception) {
-            Log.d(TAG, "getMoonPoster: ERROR ${e.message}")
             null
         }
-                  }
+}
     
     private suspend fun resolveMoonContent(contentUrl: String): String? {
         return try {
