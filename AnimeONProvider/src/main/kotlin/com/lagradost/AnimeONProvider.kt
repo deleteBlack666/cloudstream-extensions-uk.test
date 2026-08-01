@@ -1095,7 +1095,7 @@ private suspend fun getMoonPoster(iframeUrl: String): String? {
             ""
         }
 
-        if (html.isNotEmpty()) {
+       if (html.isNotEmpty()) {
             val atobRegex = Regex("""atob\s*\(\s*["']([^"']+)["']\s*\)""")
             var decodedJs = ""
             for (m in atobRegex.findAll(html)) {
@@ -1104,63 +1104,63 @@ private suspend fun getMoonPoster(iframeUrl: String): String? {
             }
 
             if (decodedJs.isNotEmpty()) {
-                    val keyRegex = Regex("""var\s+k\s*=\s*["']([^"']+)["']""")
-                    val xorKey = keyRegex.find(decodedJs)?.groupValues?.get(1)
+                val keyRegex = Regex("""var\s+k\s*=\s*["']([^"']+)["']""")
+                val xorKey = keyRegex.find(decodedJs)?.groupValues?.get(1)
 
-                    var subtitleUrl: String? = null
+                var subtitleUrl: String? = null
 
-                    if (!xorKey.isNullOrEmpty()) {
-                        val subtitleEncRegex = Regex("""subtitle\s*:\s*_0xd\s*\(\s*["']([^"']+)["']\s*\)""")
-                        val subtitleEncMatch = subtitleEncRegex.find(decodedJs)?.groupValues?.get(1)
-                        if (!subtitleEncMatch.isNullOrEmpty()) {
-                            val subtitleDecoded = moonDecrypt(subtitleEncMatch, xorKey)
-                            val subtitleEntries = mutableListOf<Pair<String, String>>()
-                            val subtitleEntryRegex = Regex("""\[([^\]]+)\](https?://[^\[,]+)""")
-                            val entryMatches = subtitleEntryRegex.findAll(subtitleDecoded).toList()
-                            if (entryMatches.isNotEmpty()) {
-                                entryMatches.forEach { m ->
-                                    subtitleEntries.add(Pair(m.groupValues[1], m.groupValues[2].trim(',',' ')))
-                                }
-                            } else if (subtitleDecoded.startsWith("http")) {
-                                subtitleEntries.add(Pair("UA", subtitleDecoded.trim()))
+                if (!xorKey.isNullOrEmpty()) {
+                    val subtitleEncRegex = Regex("""subtitle\s*:\s*_0xd\s*\(\s*["']([^"']+)["']\s*\)""")
+                    val subtitleEncMatch = subtitleEncRegex.find(decodedJs)?.groupValues?.get(1)
+                    if (!subtitleEncMatch.isNullOrEmpty()) {
+                        val subtitleDecoded = moonDecrypt(subtitleEncMatch, xorKey)
+                        val subtitleEntries = mutableListOf<Pair<String, String>>()
+                        val subtitleEntryRegex = Regex("""\[([^\]]+)\](https?://[^\[,]+)""")
+                        val entryMatches = subtitleEntryRegex.findAll(subtitleDecoded).toList()
+                        if (entryMatches.isNotEmpty()) {
+                            entryMatches.forEach { m2 ->
+                                subtitleEntries.add(Pair(m2.groupValues[1], m2.groupValues[2].trim(',',' ')))
                             }
-                            if (subtitleEntries.isNotEmpty()) {
-                                subtitleUrl = subtitleEntries.joinToString("|||") { "${it.first}::${it.second}" }
-                            }
+                        } else if (subtitleDecoded.startsWith("http")) {
+                            subtitleEntries.add(Pair("UA", subtitleDecoded.trim()))
                         }
-
-                        val encodedRegex = Regex("""_0xd\s*\(\s*["']([^"']+)["']\s*\)""")
-                        val matches = encodedRegex.findAll(decodedJs).toList()
-
-                        val allDecoded = mutableListOf<String>()
-                        for (match in matches) {
-                            val decoded = moonDecrypt(match.groupValues[1], xorKey)
-                            if (decoded.isNotEmpty()) {
-                                allDecoded.add(decoded)
-                            }
-                        }
-
-                        for (decoded in allDecoded) {
-                            val isVideoOrPlaylist = decoded.contains(".m3u8") || decoded.contains(".mp4") || decoded.contains(".webm") || decoded.startsWith("[")
-                            val isMoonDomain = decoded.contains("mooncdn") || decoded.contains("moonanime.art/content") || decoded.contains("s.moonanime.art")
-                            val isStaticAsset = decoded.contains(Regex("""\.(jpg|jpeg|png|vtt|srt|txt)(\?|$)""", RegexOption.IGNORE_CASE))
-
-                            if ((isVideoOrPlaylist || isMoonDomain) && !isStaticAsset) {
-                                return Pair(decoded, subtitleUrl)
-                            }
+                        if (subtitleEntries.isNotEmpty()) {
+                            subtitleUrl = subtitleEntries.joinToString("|||") { "${it.first}::${it.second}" }
                         }
                     }
 
-                    val contentUrlRegex = Regex("""(https?://s\.moonanime\.art/content/[^\s"'`]+)""")
-                    val contentMatch = contentUrlRegex.find(decodedJs)?.groupValues?.get(1)
-                    if (!contentMatch.isNullOrEmpty() && !contentMatch.contains(Regex("""\.(jpg|jpeg|png)$"""))) {
-                        val resolved = resolveMoonContent(contentMatch)
-                        if (!resolved.isNullOrEmpty()) {
-                            return Pair(resolved, subtitleUrl)
+                    val encodedRegex = Regex("""_0xd\s*\(\s*["']([^"']+)["']\s*\)""")
+                    val matches = encodedRegex.findAll(decodedJs).toList()
+
+                    val allDecoded = mutableListOf<String>()
+                    for (match in matches) {
+                        val decoded = moonDecrypt(match.groupValues[1], xorKey)
+                        if (decoded.isNotEmpty()) {
+                            allDecoded.add(decoded)
+                        }
+                    }
+
+                    for (decoded in allDecoded) {
+                        val isVideoOrPlaylist = decoded.contains(".m3u8") || decoded.contains(".mp4") || decoded.contains(".webm") || decoded.startsWith("[")
+                        val isMoonDomain = decoded.contains("mooncdn") || decoded.contains("moonanime.art/content") || decoded.contains("s.moonanime.art")
+                        val isStaticAsset = decoded.contains(Regex("""\.(jpg|jpeg|png|vtt|srt|txt)(\?|$)""", RegexOption.IGNORE_CASE))
+
+                        if ((isVideoOrPlaylist || isMoonDomain) && !isStaticAsset) {
+                            return Pair(decoded, subtitleUrl)
                         }
                     }
                 }
+
+                val contentUrlRegex = Regex("""(https?://s\.moonanime\.art/content/[^\s"'`]+)""")
+                val contentMatch = contentUrlRegex.find(decodedJs)?.groupValues?.get(1)
+                if (!contentMatch.isNullOrEmpty() && !contentMatch.contains(Regex("""\.(jpg|jpeg|png)$"""))) {
+                    val resolved = resolveMoonContent(contentMatch)
+                    if (!resolved.isNullOrEmpty()) {
+                        return Pair(resolved, subtitleUrl)
+                    }
+                }
             }
+       }
         }
 
         val hashRegex = Regex("""/iframe/([a-zA-Z0-9]+)/?""")
