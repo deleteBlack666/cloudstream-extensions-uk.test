@@ -485,7 +485,7 @@ class AnimeONProvider : MainAPI() {
                                 )
                             )
                             val poster = ep.poster
-                            if (!poster.isNullOrEmpty() && !poster.contains("mooncdn.space") && !episodePosters.containsKey(ep.episode)) {
+                            if (!poster.isNullOrEmpty() && !poster.contains("mooncdn.space") && !poster.contains("mooncdn.online") && !episodePosters.containsKey(ep.episode)) {
                                 episodePosters[ep.episode] = poster
                             }
                         }
