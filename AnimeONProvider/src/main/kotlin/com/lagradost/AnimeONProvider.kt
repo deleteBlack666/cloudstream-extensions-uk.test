@@ -497,22 +497,23 @@ class AnimeONProvider : MainAPI() {
                     var epPoster = episodePosters[epNum]
 
                     if (epPoster.isNullOrEmpty()) {
-                        val ashdiSource = sources.firstOrNull {
-                            it.playerName.contains("Ashdi", ignoreCase = true) && !it.videoUrl.isNullOrEmpty()
-                        }
-                        
-                        if (ashdiSource != null) {
-                            epPoster = getAshdiPoster(ashdiSource.videoUrl!!)
-                        } 
-                        
-                        if (epPoster.isNullOrEmpty()) {
-                            val moonSource = sources.firstOrNull {
-                                !it.videoUrl.isNullOrEmpty() && it.videoUrl.contains("moonanime.art")
-                            }
-                            if (moonSource != null) {
-                                epPoster = getMoonPoster(moonSource.videoUrl!!)
-                            }
-                        }
+    // Спочатку пробуємо Moon (там правильні постери з moonanime.art/content)
+    val moonSource = sources.firstOrNull {
+        !it.videoUrl.isNullOrEmpty() && it.videoUrl.contains("moonanime.art")
+    }
+    if (moonSource != null) {
+        epPoster = getMoonPoster(moonSource.videoUrl!!)
+    }
+
+    // Якщо Moon не дав результату — пробуємо Ashdi
+    if (epPoster.isNullOrEmpty()) {
+        val ashdiSource = sources.firstOrNull {
+            it.playerName.contains("Ashdi", ignoreCase = true) && !it.videoUrl.isNullOrEmpty()
+        }
+        if (ashdiSource != null) {
+            epPoster = getAshdiPoster(ashdiSource.videoUrl!!)
+        }
+    }
                     }
 
                     val dataJson = org.json.JSONArray().also { arr ->
