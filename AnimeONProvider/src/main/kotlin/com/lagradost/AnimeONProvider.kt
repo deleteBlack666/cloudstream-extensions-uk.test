@@ -252,12 +252,9 @@ class AnimeONProvider : MainAPI() {
     }
 
     private suspend fun getAshdiPoster(videoUrl: String?): String? {
-        if (videoUrl.isNullOrEmpty()) {
-            return null
-        }
-        if (!videoUrl.contains("ashdi.vip")) {
-            return null
-        }
+        if (videoUrl.isNullOrEmpty()) return null
+        if (!videoUrl.contains("ashdi.vip")) return null
+        
         val url = if (videoUrl.contains("?")) videoUrl else "$videoUrl?player=animeon.club"
         return try {
             val html = app.get(url, headers = mapOf(
@@ -268,8 +265,7 @@ class AnimeONProvider : MainAPI() {
             val posterRegex = Regex("""poster:\s*["']((?:https?:)?//[^"']+)["']""")
             val raw = posterRegex.find(html)?.groupValues?.get(1)
             if (!raw.isNullOrEmpty()) {
-                val result = if (raw.startsWith("http")) raw else "https:$raw"
-                return result
+                return if (raw.startsWith("http")) raw else "https:$raw"
             }
 
             val screenRegex = Regex("""((?:https?:)?//[^"'\s]+screen\.jpg)""")
@@ -283,10 +279,15 @@ class AnimeONProvider : MainAPI() {
     }
 
     private suspend fun getMoonPoster(iframeUrl: String): String? {
-        if (!iframeUrl.contains("/iframe/")) return null
+        if (!iframeUrl.contains("/iframe/")) {
+            Log.d(TAG, "getMoonPoster: URL не містить /iframe/ -> $iframeUrl")
+            return null
+        }
 
         val cleanUrl = if (iframeUrl.contains("player=")) iframeUrl
             else "$iframeUrl${if (iframeUrl.contains("?")) "&" else "?"}player=animeon.club"
+
+        Log.d(TAG, "getMoonPoster: Починаємо запит до iframe -> $cleanUrl")
 
         return try {
             val html = app.get(cleanUrl, headers = mapOf(
@@ -302,34 +303,70 @@ class AnimeONProvider : MainAPI() {
                 "Upgrade-Insecure-Requests" to "1"
             ), cacheTime = 0).text
 
-            if (html.isEmpty()) return null
+            if (html.isEmpty()) {
+                Log.e(TAG, "getMoonPoster: Помилка - порожній HTML з iframe!")
+                return null
+            }
+            
+            Log.d(TAG, "getMoonPoster: HTML успішно завантажено, розмір: ${html.length} символів")
 
-            // Перебираємо ВСІ atob, шукаємо той що містить poster
             val atobRegex = Regex("""atob\s*\(\s*["']([^"']+)["']\s*\)""")
-            for (match in atobRegex.findAll(html)) {
-                val decoded = moonOuterDecode(match.groupValues[1])
+            val matches = atobRegex.findAll(html).toList()
+            
+            Log.d(TAG, "getMoonPoster: Знайдено ${matches.size} блоків atob()")
+
+            for ((index, match) in matches.withIndex()) {
+                val encodedBase64 = match.groupValues[1]
+                val decoded = moonOuterDecode(encodedBase64)
+                
+                Log.d(TAG, "getMoonPoster: [Блок $index] Розмір після moonOuterDecode: ${decoded.length}. Чи є слово 'poster'? -> ${decoded.contains("poster")}")
+                
                 if (!decoded.contains("poster")) continue
 
-                // Прямий URL
                 val direct = Regex("""poster\s*:\s*["'](https?://[^"']+)["']""")
                     .find(decoded)?.groupValues?.get(1)
-                if (direct != null) return direct
+                
+                if (direct != null) {
+                    Log.d(TAG, "getMoonPoster: Знайдено прямий URL постера -> $direct")
+                    return direct
+                } else {
+                    Log.d(TAG, "getMoonPoster: Прямий URL постера не знайдено, пробуємо розшифрувати через _0xd...")
+                }
 
-                // Зашифрований через _0xd
                 val xorKey = Regex("""var\s+k\s*=\s*["']([^"']+)["']""")
-                    .find(decoded)?.groupValues?.get(1) ?: continue
+                    .find(decoded)?.groupValues?.get(1) 
+                    
+                Log.d(TAG, "getMoonPoster: Знайдений xorKey -> $xorKey")
+                    
+                if (xorKey == null) continue
+                
                 val posterEnc = Regex("""poster\s*:\s*_0xd\s*\(\s*["']([^"']+)["']\s*\)""")
-                    .find(decoded)?.groupValues?.get(1) ?: continue
-                val result = moonDecrypt(posterEnc, xorKey)
-                if (result.startsWith("http")) return result
+                    .find(decoded)?.groupValues?.get(1) 
+                    
+                Log.d(TAG, "getMoonPoster: Знайдений зашифрований рядок постера -> $posterEnc")    
+                    
+                if (posterEnc != null) {
+                    val result = moonDecrypt(posterEnc, xorKey)
+                    Log.d(TAG, "getMoonPoster: Результат після moonDecrypt -> $result")
+                    
+                    if (result.startsWith("http")) {
+                        return result
+                    } else {
+                        Log.w(TAG, "getMoonPoster: Розшифрований постер не починається з 'http'!")
+                    }
+                }
             }
+            
+            Log.w(TAG, "getMoonPoster: Не вдалося знайти постер у жодному з atob() блоків.")
             null
         } catch (e: Exception) {
+            Log.e(TAG, "getMoonPoster: Критична помилка під час парсингу постера -> ${e.message}", e)
             null
         }
     }
     
     private suspend fun resolveMoonContent(contentUrl: String): String? {
+        Log.d(TAG, "resolveMoonContent: Спроба розгортання кінцевого посилання Moon -> $contentUrl")
         return try {
             val cookieResponse = app.get(
                 "https://moonanime.art/",
@@ -341,6 +378,7 @@ class AnimeONProvider : MainAPI() {
                 cacheTime = 0
             )
             val cookies = cookieResponse.cookies
+            Log.d(TAG, "resolveMoonContent: Зібрано cookies з головної сторінки (кількість: ${cookies.size})")
 
             val response = app.get(
                 contentUrl,
@@ -360,13 +398,22 @@ class AnimeONProvider : MainAPI() {
             )
 
             val location = response.headers["location"] ?: response.headers["Location"]
-            if (!location.isNullOrEmpty()) {
+            val finalResult = if (!location.isNullOrEmpty()) {
+                Log.d(TAG, "resolveMoonContent: Знайдено Header Location -> $location")
                 location
             } else {
                 val body = response.text.trim()
-                if (body.startsWith("http")) body else null
+                if (body.startsWith("http")) {
+                    Log.d(TAG, "resolveMoonContent: Отримано пряме посилання з Body -> $body")
+                    body 
+                } else {
+                    Log.w(TAG, "resolveMoonContent: Location порожній, а Body не є посиланням.")
+                    null
+                }
             }
+            finalResult
         } catch (e: Exception) {
+            Log.e(TAG, "resolveMoonContent: Помилка під час запиту -> ${e.message}", e)
             null
         }
     }
@@ -512,12 +559,10 @@ class AnimeONProvider : MainAPI() {
                     val sources = episodeSources[epNum] ?: return@forEach
                     var epPoster: String? = null
 
-                    // 1. Спочатку шукаємо постер саме від Moon (з API)
                     epPoster = sources.firstNotNullOfOrNull { s ->
                         s.apiPoster?.takeIf { !it.contains("mooncdn.") && s.videoUrl?.contains("moonanime.art") == true }
                     }
 
-                    // 2. Якщо в API немає валідного постера Moon, пробуємо дістати з Moon iframe
                     if (epPoster.isNullOrEmpty()) {
                         val moonSource = sources.firstOrNull {
                             !it.videoUrl.isNullOrEmpty() && it.videoUrl.contains("moonanime.art")
@@ -527,14 +572,12 @@ class AnimeONProvider : MainAPI() {
                         }
                     }
 
-                    // 3. Якщо Moon взагалі глухий, шукаємо постер Ashdi (з API)
                     if (epPoster.isNullOrEmpty() || epPoster.contains("mooncdn.")) {
                         epPoster = sources.firstNotNullOfOrNull { s ->
                             s.apiPoster?.takeIf { s.playerName.contains("Ashdi", ignoreCase = true) }
                         }
                     }
 
-                    // 4. Якщо в API Ashdi теж пусто, парсимо iframe Ashdi
                     if (epPoster.isNullOrEmpty() || epPoster.contains("mooncdn.")) {
                         val ashdiSource = sources.firstOrNull {
                             it.playerName.contains("Ashdi", ignoreCase = true) && !it.videoUrl.isNullOrEmpty()
@@ -544,14 +587,12 @@ class AnimeONProvider : MainAPI() {
                         }
                     }
 
-                    // 5. Останній шанс — беремо будь-який валідний постер з API, якщо він є
                     if (epPoster.isNullOrEmpty() || epPoster.contains("mooncdn.")) {
                         epPoster = sources.firstNotNullOfOrNull { s ->
                             s.apiPoster?.takeIf { !it.contains("mooncdn.") }
                         }
                     }
 
-                    // 6. Глобальний фільтр: якщо якимось чином проліз мертвий CDN — вбиваємо його
                     if (epPoster != null && epPoster.contains("mooncdn.")) {
                         epPoster = null
                     }
@@ -655,6 +696,8 @@ class AnimeONProvider : MainAPI() {
             val isAshdi = source.playerName.contains("Ashdi", ignoreCase = true)
             val fileUrl = source.fileUrl
             val videoUrl = source.videoUrl
+            
+            Log.d(TAG, "loadLinks: Починаємо обробку плеєра '$sourceName'. fileUrl=$fileUrl, videoUrl=$videoUrl")
 
             try {
                 if (isAshdi) {
@@ -674,6 +717,7 @@ class AnimeONProvider : MainAPI() {
                     }
                 } else {
                     if (!fileUrl.isNullOrEmpty()) {
+                        Log.d(TAG, "loadLinks: Парсимо прямий M3u8 з API Moon -> $fileUrl")
                         val streams = M3u8Helper.generateM3u8(
                             source = sourceName,
                             streamUrl = fileUrl,
@@ -685,7 +729,9 @@ class AnimeONProvider : MainAPI() {
                         else streams.forEach { callback(fixMovieExtractorLink(it, sourceName)) }
                         foundAny = true
                     } else if (!videoUrl.isNullOrEmpty() && videoUrl.contains("moonanime.art")) {
+                        Log.d(TAG, "loadLinks: Обробляємо iframe Moon -> $videoUrl")
                         if (videoUrl.contains("m3u8")) {
+                            Log.d(TAG, "loadLinks: Iframe Moon містить прямий m3u8. Парсимо...")
                             val streams = M3u8Helper.generateM3u8(
                                 source = sourceName,
                                 streamUrl = videoUrl,
@@ -697,16 +743,21 @@ class AnimeONProvider : MainAPI() {
                             else streams.forEach { callback(fixMovieExtractorLink(it, sourceName)) }
                             foundAny = true
                         } else {
+                            Log.d(TAG, "loadLinks: Запускаємо getMoonFile для $videoUrl")
                             val (rawFile, subUrl) = getMoonFile(videoUrl)
                             if (rawFile.isNotEmpty()) {
+                                Log.d(TAG, "loadLinks: MoonFile повернув результат. Підключаємо субтитри та викликаємо processMoonRawFile")
                                 invokeSubtitles(subUrl, subtitleCallback)
                                 processMoonRawFile(rawFile, sourceName, isMovie = false, callback)
                                 foundAny = true
+                            } else {
+                                Log.w(TAG, "loadLinks: getMoonFile повернув порожній результат для $videoUrl")
                             }
                         }
                     }
                 }
             } catch (e: Exception) {
+                Log.e(TAG, "loadLinks: Помилка завантаження лінків для джерела $sourceName -> ${e.message}", e)
             }
         }
 
@@ -900,6 +951,8 @@ class AnimeONProvider : MainAPI() {
         isMovie: Boolean,
         callback: (ExtractorLink) -> Unit
     ) {
+        Log.d(TAG, "processMoonRawFile: Початок обробки файлу -> ${rawFile.take(300)}...")
+        
         val moonVideoHeaders = mapOf(
             "User-Agent" to userAgent,
             "Accept" to "*/*",
@@ -914,15 +967,22 @@ class AnimeONProvider : MainAPI() {
         )
 
         if (rawFile.startsWith("[")) {
+            Log.d(TAG, "processMoonRawFile: Виявлено формат масиву якостей (починається з '[')")
             val qualityRegex = Regex("""\[(\d+p)\](https?://[^\s,]+)""")
-            qualityRegex.findAll(rawFile).forEach { match ->
+            val matches = qualityRegex.findAll(rawFile).toList()
+            Log.d(TAG, "processMoonRawFile: Знайдено ${matches.size} збігів для якостей")
+            
+            matches.forEach { match ->
                 val qualityStr = match.groupValues[1]
                 val qUrl       = match.groupValues[2]
                 val qualityInt = qualityStr.replace("p", "").toIntOrNull()
                     ?: com.lagradost.cloudstream3.utils.Qualities.Unknown.value
 
+                Log.d(TAG, "processMoonRawFile: Обробка якості $qualityStr -> $qUrl")
+
                 when {
                     qUrl.contains(".m3u8") -> {
+                        Log.d(TAG, "processMoonRawFile: Це m3u8 посилання, генеруємо потоки...")
                         val streams = M3u8Helper.generateM3u8(
                             source    = sourceName,
                             streamUrl = qUrl,
@@ -931,13 +991,16 @@ class AnimeONProvider : MainAPI() {
                         )
                         val filtered = streams.dropLast(1)
                         val finalStreams = if (filtered.isNotEmpty()) filtered else streams
+                        Log.d(TAG, "processMoonRawFile: Згенеровано ${finalStreams.size} потоків m3u8")
                         finalStreams.forEach {
                             callback(fixMovieExtractorLink(it, sourceName))
                         }
                     }
                     qUrl.contains("s.moonanime.art") || qUrl.contains("moonanime.art/content") -> {
+                        Log.d(TAG, "processMoonRawFile: Посилання є контентом Moon, намагаємось розгорнути...")
                         val finalUrl = resolveMoonContent(qUrl)
                         if (!finalUrl.isNullOrEmpty()) {
+                            Log.d(TAG, "processMoonRawFile: Успішно розгорнуто -> $finalUrl")
                             val link = ExtractorLink(
                                 source  = name,
                                 name    = sourceName,
@@ -948,9 +1011,12 @@ class AnimeONProvider : MainAPI() {
                                 headers = moonVideoHeaders
                             )
                             callback(fixMovieExtractorLink(link, sourceName))
+                        } else {
+                            Log.w(TAG, "processMoonRawFile: Не вдалося розгорнути посилання $qUrl")
                         }
                     }
                     else -> {
+                        Log.d(TAG, "processMoonRawFile: Пряме відео-посилання -> $qUrl")
                         val link = ExtractorLink(
                             source  = name,
                             name    = sourceName,
@@ -965,6 +1031,7 @@ class AnimeONProvider : MainAPI() {
                 }
             }
         } else if (rawFile.contains(".m3u8")) {
+            Log.d(TAG, "processMoonRawFile: Звичайне m3u8 посилання. Генеруємо потоки...")
             val streams = M3u8Helper.generateM3u8(
                 source    = sourceName,
                 streamUrl = rawFile,
@@ -973,12 +1040,15 @@ class AnimeONProvider : MainAPI() {
             )
             val filtered = streams.dropLast(1)
             val finalStreams = if (filtered.isNotEmpty()) filtered else streams
+            Log.d(TAG, "processMoonRawFile: Згенеровано ${finalStreams.size} потоків m3u8")
             finalStreams.forEach {
                 callback(fixMovieExtractorLink(it, sourceName))
             }
         } else if (rawFile.contains("s.moonanime.art") || rawFile.contains("moonanime.art/content")) {
+            Log.d(TAG, "processMoonRawFile: Одиночне посилання контенту Moon, намагаємось розгорнути...")
             val finalUrl = resolveMoonContent(rawFile)
             if (!finalUrl.isNullOrEmpty()) {
+                Log.d(TAG, "processMoonRawFile: Успішно розгорнуто -> $finalUrl")
                 val link = ExtractorLink(
                     source  = name,
                     name    = sourceName,
@@ -989,8 +1059,11 @@ class AnimeONProvider : MainAPI() {
                     headers = moonVideoHeaders
                 )
                 callback(fixMovieExtractorLink(link, sourceName))
+            } else {
+                Log.w(TAG, "processMoonRawFile: Не вдалося розгорнути посилання $rawFile")
             }
         } else {
+            Log.d(TAG, "processMoonRawFile: Невідомий формат або пряме посилання -> $rawFile")
             val link = ExtractorLink(
                 source  = name,
                 name    = sourceName,
@@ -1050,7 +1123,10 @@ class AnimeONProvider : MainAPI() {
                 decryptedBytes[i] = ((decoded[i].toInt() and 0xFF) xor key[i % key.length].code).toByte()
             }
             String(decryptedBytes, Charsets.UTF_8)
-        } catch (e: Exception) { "" }
+        } catch (e: Exception) { 
+            Log.e(TAG, "moonDecrypt: Помилка розшифровки! encoded=$encoded, key=$key", e)
+            "" 
+        }
     }
 
     private fun moonOuterDecode(base64Blob: String): String {
@@ -1069,7 +1145,10 @@ class AnimeONProvider : MainAPI() {
                 state = (d + k) and 0xFF
             }
             String(result, Charsets.UTF_8)
-        } catch (e: Exception) { "" }
+        } catch (e: Exception) { 
+            Log.e(TAG, "moonOuterDecode: Помилка первинного декодування blob", e)
+            "" 
+        }
     }
 
     private suspend fun getMoonFile(iframeUrl: String): Pair<String, String?> {
@@ -1078,6 +1157,8 @@ class AnimeONProvider : MainAPI() {
         } else {
             "$iframeUrl${if (iframeUrl.contains("?")) "&" else "?"}player=animeon.club"
         }
+
+        Log.d(TAG, "getMoonFile: Починаємо обробку iframe для відео -> $cleanUrl")
 
         val html = try {
             app.get(cleanUrl, headers = mapOf(
@@ -1093,15 +1174,25 @@ class AnimeONProvider : MainAPI() {
                 "Upgrade-Insecure-Requests" to "1"
             ), cacheTime = 0).text
         } catch (e: Exception) {
+            Log.e(TAG, "getMoonFile: Помилка отримання HTML -> ${e.message}", e)
             ""
         }
 
         if (html.isNotEmpty()) {
+            Log.d(TAG, "getMoonFile: HTML успішно завантажено, розмір: ${html.length}")
             val atobRegex = Regex("""atob\s*\(\s*["']([^"']+)["']\s*\)""")
             var decodedJs = ""
-            for (m in atobRegex.findAll(html)) {
+            
+            val matches = atobRegex.findAll(html).toList()
+            Log.d(TAG, "getMoonFile: Знайдено ${matches.size} блоків atob(). Перевіряємо їх...")
+            
+            for (m in matches) {
                 val d = moonOuterDecode(m.groupValues[1])
-                if (d.contains("_0xd") || d.contains("file")) { decodedJs = d; break }
+                if (d.contains("_0xd") || d.contains("file")) { 
+                    decodedJs = d
+                    Log.d(TAG, "getMoonFile: Знайдено потрібний atob (містить _0xd або file). Розмір скрипта: ${decodedJs.length}")
+                    break 
+                }
             }
 
             if (decodedJs.isNotEmpty()) {
@@ -1111,13 +1202,20 @@ class AnimeONProvider : MainAPI() {
                 var subtitleUrl: String? = null
 
                 if (!xorKey.isNullOrEmpty()) {
+                    Log.d(TAG, "getMoonFile: Знайдений xorKey -> $xorKey")
+                    
                     val subtitleEncRegex = Regex("""subtitle\s*:\s*_0xd\s*\(\s*["']([^"']+)["']\s*\)""")
                     val subtitleEncMatch = subtitleEncRegex.find(decodedJs)?.groupValues?.get(1)
+                    
                     if (!subtitleEncMatch.isNullOrEmpty()) {
+                        Log.d(TAG, "getMoonFile: Знайдено зашифровані субтитри -> $subtitleEncMatch")
                         val subtitleDecoded = moonDecrypt(subtitleEncMatch, xorKey)
+                        Log.d(TAG, "getMoonFile: Розшифровані субтитри -> $subtitleDecoded")
+                        
                         val subtitleEntries = mutableListOf<Pair<String, String>>()
                         val subtitleEntryRegex = Regex("""\[([^\]]+)\](https?://[^\[,]+)""")
                         val entryMatches = subtitleEntryRegex.findAll(subtitleDecoded).toList()
+                        
                         if (entryMatches.isNotEmpty()) {
                             entryMatches.forEach { m ->
                                 subtitleEntries.add(Pair(m.groupValues[1], m.groupValues[2].trim(',',' ')))
@@ -1125,16 +1223,21 @@ class AnimeONProvider : MainAPI() {
                         } else if (subtitleDecoded.startsWith("http")) {
                             subtitleEntries.add(Pair("UA", subtitleDecoded.trim()))
                         }
+                        
                         if (subtitleEntries.isNotEmpty()) {
                             subtitleUrl = subtitleEntries.joinToString("|||") { "${it.first}::${it.second}" }
+                            Log.d(TAG, "getMoonFile: Субтитри сформовано -> $subtitleUrl")
                         }
+                    } else {
+                        Log.d(TAG, "getMoonFile: Зашифрованих субтитрів не знайдено.")
                     }
 
                     val encodedRegex = Regex("""_0xd\s*\(\s*["']([^"']+)["']\s*\)""")
-                    val matches = encodedRegex.findAll(decodedJs).toList()
+                    val encMatches = encodedRegex.findAll(decodedJs).toList()
+                    Log.d(TAG, "getMoonFile: Знайдено ${encMatches.size} викликів _0xd()")
 
                     val allDecoded = mutableListOf<String>()
-                    for (match in matches) {
+                    for (match in encMatches) {
                         val decoded = moonDecrypt(match.groupValues[1], xorKey)
                         if (decoded.isNotEmpty()) {
                             allDecoded.add(decoded)
@@ -1142,31 +1245,45 @@ class AnimeONProvider : MainAPI() {
                     }
 
                     for (decoded in allDecoded) {
+                        Log.d(TAG, "getMoonFile: Перевіряємо розшифрований рядок _0xd -> ${decoded.take(150)}...")
+                        
                         val isVideoOrPlaylist = decoded.contains(".m3u8") || decoded.contains(".mp4") || decoded.contains(".webm") || decoded.startsWith("[")
                         val isMoonDomain = decoded.contains("mooncdn") || decoded.contains("moonanime.art/content") || decoded.contains("s.moonanime.art")
                         val isStaticAsset = decoded.contains(Regex("""\.(jpg|jpeg|png|vtt|srt|txt)(\?|$)""", RegexOption.IGNORE_CASE))
 
                         if ((isVideoOrPlaylist || isMoonDomain) && !isStaticAsset) {
+                            Log.d(TAG, "getMoonFile: Знайдено фінальне посилання/структуру -> $decoded")
                             return Pair(decoded, subtitleUrl)
                         }
                     }
+                } else {
+                    Log.w(TAG, "getMoonFile: xorKey не знайдено в JavaScript!")
                 }
 
+                // Fallback: якщо прямого файлу немає, шукаємо посилання /content/
+                Log.d(TAG, "getMoonFile: Основний розбір не спрацював, шукаємо пряме посилання content у JS...")
                 val contentUrlRegex = Regex("""(https?://s\.moonanime\.art/content/[^\s"'`]+)""")
                 val contentMatch = contentUrlRegex.find(decodedJs)?.groupValues?.get(1)
                 if (!contentMatch.isNullOrEmpty() && !contentMatch.contains(Regex("""\.(jpg|jpeg|png)$"""))) {
+                    Log.d(TAG, "getMoonFile: Знайдено content посилання у JS -> $contentMatch")
                     val resolved = resolveMoonContent(contentMatch)
                     if (!resolved.isNullOrEmpty()) {
+                        Log.d(TAG, "getMoonFile: Успішно розгорнуто content -> $resolved")
                         return Pair(resolved, subtitleUrl)
                     }
                 }
+            } else {
+                Log.w(TAG, "getMoonFile: Відповідний блок atob (із JS-кодом) не знайдено.")
             }
         }
 
+        // Fallback: генерація якостей за хешем
+        Log.d(TAG, "getMoonFile: Все попереднє не вдалося, пробуємо Fallback через хеш iframe...")
         val hashRegex = Regex("""/iframe/([a-zA-Z0-9]+)/?""")
         val hash = hashRegex.find(cleanUrl)?.groupValues?.get(1)
 
         if (!hash.isNullOrEmpty()) {
+            Log.d(TAG, "getMoonFile: Знайдено хеш -> $hash")
             val qualityResults = mutableListOf<String>()
             for (quality in listOf(1080, 720, 480, 360)) {
                 val contentUrl = "https://s.moonanime.art/content/v/$hash/$quality/"
@@ -1177,10 +1294,16 @@ class AnimeONProvider : MainAPI() {
             }
             if (qualityResults.isNotEmpty()) {
                 val result = qualityResults.joinToString(".")
+                Log.d(TAG, "getMoonFile: Відпрацював fallback через hash. Результат -> $result")
                 return Pair(result, null)
+            } else {
+                Log.w(TAG, "getMoonFile: Fallback через хеш не дав результатів (не вдалося розгорнути посилання).")
             }
+        } else {
+            Log.w(TAG, "getMoonFile: Хеш з URL не знайдено.")
         }
 
+        Log.e(TAG, "getMoonFile: Жоден метод не спрацював. Повертаємо порожній результат.")
         return Pair("", null)
     }
 
