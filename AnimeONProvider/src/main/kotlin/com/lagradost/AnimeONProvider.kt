@@ -1,4 +1,4 @@
-package com.lagradost
+Package com.lagradost
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addMalId
@@ -133,6 +133,7 @@ class AnimeONProvider : MainAPI() {
         val playerName: String,
         val videoUrl: String?,
         val fileUrl: String?,
+        val apiPoster: String? = null
     )
 
     private data class DirectPlayerResponse(
@@ -446,7 +447,6 @@ class AnimeONProvider : MainAPI() {
             try {
                 val translations = AppUtils.parseJson<SafeTranslationsResponse>(translationsJson).translations
                 val episodeSources = mutableMapOf<Int, MutableList<EpisodeSource>>()
-                val episodePosters = mutableMapOf<Int, String?>()
 
                 for (translation in translations) {
                     val translationId = translation.translation.id
@@ -482,21 +482,23 @@ class AnimeONProvider : MainAPI() {
                                     playerName = player.name,
                                     videoUrl = ep.videoUrl,
                                     fileUrl = ep.fileUrl,
+                                    apiPoster = ep.poster
                                 )
                             )
-                            val poster = ep.poster
-                            if (!poster.isNullOrEmpty() && !poster.contains("mooncdn.space") && !poster.contains("mooncdn.online") && !poster.contains("mooncdn.net") && !episodePosters.containsKey(ep.episode)) {
-                                episodePosters[ep.episode] = poster
-                            }
                         }
                     } 
                 } 
 
                 episodeSources.keys.sorted().forEach { epNum ->
                     val sources = episodeSources[epNum] ?: return@forEach
-                    var epPoster = episodePosters[epNum]
+                    var epPoster: String? = null
 
-                    // 1. Спочатку перевіряємо через Moon
+                    // 1. Спочатку шукаємо постер саме від Moon (з API)
+                    epPoster = sources.firstNotNullOfOrNull { s ->
+                        s.apiPoster?.takeIf { !it.contains("mooncdn.") && s.videoUrl?.contains("moonanime.art") == true }
+                    }
+
+                    // 2. Якщо в API немає валідного постера Moon, пробуємо дістати з Moon iframe
                     if (epPoster.isNullOrEmpty()) {
                         val moonSource = sources.firstOrNull {
                             !it.videoUrl.isNullOrEmpty() && it.videoUrl.contains("moonanime.art")
@@ -506,18 +508,31 @@ class AnimeONProvider : MainAPI() {
                         }
                     }
 
-                    // 2. Якщо Moon нічого не дав, або повернув мертвий лінк, шукаємо через Ashdi
-                    if (epPoster.isNullOrEmpty() || (epPoster != null && epPoster.contains("mooncdn."))) {
+                    // 3. Якщо Moon взагалі глухий, шукаємо постер Ashdi (з API)
+                    if (epPoster.isNullOrEmpty() || epPoster.contains("mooncdn.")) {
+                        epPoster = sources.firstNotNullOfOrNull { s ->
+                            s.apiPoster?.takeIf { s.playerName.contains("Ashdi", ignoreCase = true) }
+                        }
+                    }
+
+                    // 4. Якщо в API Ashdi теж пусто, парсимо iframe Ashdi
+                    if (epPoster.isNullOrEmpty() || epPoster.contains("mooncdn.")) {
                         val ashdiSource = sources.firstOrNull {
                             it.playerName.contains("Ashdi", ignoreCase = true) && !it.videoUrl.isNullOrEmpty()
                         }
-                        
                         if (ashdiSource != null) {
                             epPoster = getAshdiPoster(ashdiSource.videoUrl!!)
                         }
                     }
 
-                    // 3. Глобальний фільтр перед створенням епізоду: якщо залишився мертвий лінк - видаляємо
+                    // 5. Останній шанс — беремо будь-який валідний постер з API, якщо він є
+                    if (epPoster.isNullOrEmpty() || epPoster.contains("mooncdn.")) {
+                        epPoster = sources.firstNotNullOfOrNull { s ->
+                            s.apiPoster?.takeIf { !it.contains("mooncdn.") }
+                        }
+                    }
+
+                    // 6. Глобальний фільтр: якщо якимось чином проліз мертвий CDN — вбиваємо його
                     if (epPoster != null && epPoster.contains("mooncdn.")) {
                         epPoster = null
                     }
