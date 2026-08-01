@@ -18,7 +18,7 @@ class AnimeONProvider : MainAPI() {
     override val hasQuickSearch = true
     override val hasDownloadSupport = true
 
-private val TAG = "AnimeON"
+    private val TAG = "AnimeON"
     
     override fun getVideoInterceptor(extractorLink: ExtractorLink): okhttp3.Interceptor {
         return okhttp3.Interceptor { chain ->
@@ -282,7 +282,7 @@ private val TAG = "AnimeON"
         }
     }
 
-private suspend fun getMoonPoster(iframeUrl: String): String? {
+    private suspend fun getMoonPoster(iframeUrl: String): String? {
         if (!iframeUrl.contains("/iframe/")) return null
 
         val cleanUrl = if (iframeUrl.contains("player=")) iframeUrl
@@ -304,29 +304,30 @@ private suspend fun getMoonPoster(iframeUrl: String): String? {
 
             if (html.isEmpty()) return null
 
-            val atobMatch = Regex("""atob\s*\(\s*["']([^"']+)["']\s*\)""")
-                .find(html)?.groupValues?.get(1) ?: return null
+            // Перебираємо ВСІ atob, шукаємо той що містить poster
+            val atobRegex = Regex("""atob\s*\(\s*["']([^"']+)["']\s*\)""")
+            for (match in atobRegex.findAll(html)) {
+                val decoded = moonOuterDecode(match.groupValues[1])
+                if (!decoded.contains("poster")) continue
 
-            val decodedJs = moonOuterDecode(atobMatch)
-            if (decodedJs.isEmpty()) return null
+                // Прямий URL
+                val direct = Regex("""poster\s*:\s*["'](https?://[^"']+)["']""")
+                    .find(decoded)?.groupValues?.get(1)
+                if (direct != null) return direct
 
-            // 1. Спрямований пошук прямого URL
-            val directPoster = Regex("""poster\s*:\s*["'](https?://[^"']+)["']""")
-                .find(decodedJs)?.groupValues?.get(1)
-            if (directPoster != null) return directPoster
-
-            // 2. Poster зашифрований через _0xd("...")
-            val xorKey = Regex("""var\s+k\s*=\s*["']([^"']+)["']""")
-                .find(decodedJs)?.groupValues?.get(1) ?: return null
-
-            val posterEnc = Regex("""poster\s*:\s*_0xd\s*\(\s*["']([^"']+)["']\s*\)""")
-                .find(decodedJs)?.groupValues?.get(1) ?: return null
-
-            moonDecrypt(posterEnc, xorKey).takeIf { it.startsWith("http") }
+                // Зашифрований через _0xd
+                val xorKey = Regex("""var\s+k\s*=\s*["']([^"']+)["']""")
+                    .find(decoded)?.groupValues?.get(1) ?: continue
+                val posterEnc = Regex("""poster\s*:\s*_0xd\s*\(\s*["']([^"']+)["']\s*\)""")
+                    .find(decoded)?.groupValues?.get(1) ?: continue
+                val result = moonDecrypt(posterEnc, xorKey)
+                if (result.startsWith("http")) return result
+            }
+            null
         } catch (e: Exception) {
             null
         }
-}
+    }
     
     private suspend fun resolveMoonContent(contentUrl: String): String? {
         return try {
@@ -1095,7 +1096,7 @@ private suspend fun getMoonPoster(iframeUrl: String): String? {
             ""
         }
 
-       if (html.isNotEmpty()) {
+        if (html.isNotEmpty()) {
             val atobRegex = Regex("""atob\s*\(\s*["']([^"']+)["']\s*\)""")
             var decodedJs = ""
             for (m in atobRegex.findAll(html)) {
@@ -1118,8 +1119,8 @@ private suspend fun getMoonPoster(iframeUrl: String): String? {
                         val subtitleEntryRegex = Regex("""\[([^\]]+)\](https?://[^\[,]+)""")
                         val entryMatches = subtitleEntryRegex.findAll(subtitleDecoded).toList()
                         if (entryMatches.isNotEmpty()) {
-                            entryMatches.forEach { m2 ->
-                                subtitleEntries.add(Pair(m2.groupValues[1], m2.groupValues[2].trim(',',' ')))
+                            entryMatches.forEach { m ->
+                                subtitleEntries.add(Pair(m.groupValues[1], m.groupValues[2].trim(',',' ')))
                             }
                         } else if (subtitleDecoded.startsWith("http")) {
                             subtitleEntries.add(Pair("UA", subtitleDecoded.trim()))
@@ -1160,7 +1161,6 @@ private suspend fun getMoonPoster(iframeUrl: String): String? {
                     }
                 }
             }
-       }
         }
 
         val hashRegex = Regex("""/iframe/([a-zA-Z0-9]+)/?""")
