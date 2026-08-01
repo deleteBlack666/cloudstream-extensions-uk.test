@@ -280,6 +280,8 @@ class AnimeONProvider : MainAPI() {
     }
 
     private suspend fun getMoonPoster(iframeUrl: String): String? {
+        if (!iframeUrl.contains("/iframe/")) return null
+
         val cleanUrl = if (iframeUrl.contains("player=")) {
             iframeUrl
         } else {
@@ -287,29 +289,42 @@ class AnimeONProvider : MainAPI() {
         }
 
         return try {
+            val cookieResponse = app.get(
+                "https://moonanime.art/",
+                headers = mapOf(
+                    "User-Agent" to userAgent,
+                    "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "Accept-Language" to "uk-UA,uk;q=0.9",
+                ),
+                cacheTime = 0
+            )
+            val cookies = cookieResponse.cookies
+
             val html = app.get(cleanUrl, headers = mapOf(
-                "User-Agent" to userAgent,
-                "Referer" to "$mainUrl/"
-            ), cacheTime = 0).text
+                "User-Agent"                to userAgent,
+                "Accept"                    to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+                "Accept-Language"           to "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
+                "Referer"                   to "https://animeon.club/",
+                "X-Requested-With"          to "mark.via.gp",
+                "Sec-Fetch-Site"            to "none",
+                "Sec-Fetch-Mode"            to "navigate",
+                "Sec-Fetch-User"            to "?1",
+                "Sec-Fetch-Dest"            to "document",
+                "Upgrade-Insecure-Requests" to "1"
+            ), cookies = cookies, cacheTime = 0).text
 
-            val atobRegex = Regex("""atob\s*\(\s*["']([^"']+)["']\s*\)""")
-            val atobMatch = atobRegex.find(html)?.groupValues?.get(1)
+            val atobMatch = Regex("""atob\s*\(\s*["']([^"']+)["']\s*\)""")
+                .find(html)?.groupValues?.get(1) ?: return null
 
-            if (!atobMatch.isNullOrEmpty()) {
-                val decodedJs = moonOuterDecode(atobMatch)
+            val decodedJs = moonOuterDecode(atobMatch)
+            if (decodedJs.isEmpty()) return null
 
-                val posterRegex = Regex("""poster\s*:\s*["'](https?://[^"']+)["']""")
-                val posterMatch = posterRegex.find(decodedJs)?.groupValues?.get(1)
-
-                if (posterMatch != null) {
-                    posterMatch
-                } else null
-            } else null
+            Regex("""poster\s*:\s*["'](https?://[^"']+)["']""")
+                .find(decodedJs)?.groupValues?.get(1)
         } catch (e: Exception) {
             null
         }
     }
-
     private suspend fun resolveMoonContent(contentUrl: String): String? {
         return try {
             val cookieResponse = app.get(
