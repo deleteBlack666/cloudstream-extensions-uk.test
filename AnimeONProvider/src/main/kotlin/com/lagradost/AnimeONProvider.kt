@@ -17,6 +17,8 @@ class AnimeONProvider : MainAPI() {
     override val hasQuickSearch = true
     override val hasDownloadSupport = true
 
+    private val TAG = "ANIMEON"
+
     override fun getVideoInterceptor(extractorLink: ExtractorLink): okhttp3.Interceptor {
         return okhttp3.Interceptor { chain ->
             val request = chain.request()
@@ -419,10 +421,14 @@ class AnimeONProvider : MainAPI() {
         val animeId = url.substringAfterLast("/").substringBefore("-").toIntOrNull()
             ?: throw Exception("Invalid anime ID in URL: $url")
 
+        android.util.Log.d(TAG, "load() animeId=$animeId url=$url")
+
         val realApiUrl = resolveAnimeApiUrl(animeId)
         val jsonText = fetchJsonOrNull(realApiUrl) ?: throw Exception("Failed to load anime $animeId")
         val animeJSON = AppUtils.parseJson<SafeAnimeInfoModel>(jsonText)
             ?: throw Exception("Failed to parse anime $animeId")
+
+        android.util.Log.d(TAG, "Anime info: title=${animeJSON.titleUa} type=${animeJSON.type} status=${animeJSON.status} episodes=${animeJSON.episodes}")
 
         val posterUrl = animeJSON.image?.preview?.let { posterApi.format(it) } ?: ""
         val genres = animeJSON.genres?.map { it.nameUa } ?: emptyList()
@@ -437,7 +443,10 @@ class AnimeONProvider : MainAPI() {
             }
         }
 
+        android.util.Log.d(TAG, "tvType=$tvType showStatus=$showStatus posterUrl=$posterUrl")
+
         val episodeInfoMap = fetchEpisodeInfoMap(animeId)
+        android.util.Log.d(TAG, "episodeInfoMap size=${episodeInfoMap.size}")
 
         val episodes = mutableListOf<com.lagradost.cloudstream3.Episode>()
         val translationsJson = fetchJsonOrNull("$mainUrl/api/player/$animeId/translations")
@@ -445,12 +454,18 @@ class AnimeONProvider : MainAPI() {
         if (translationsJson != null) {
             try {
                 val translations = AppUtils.parseJson<SafeTranslationsResponse>(translationsJson).translations
+                android.util.Log.d(TAG, "translations count=${translations.size}")
+
                 val episodeSources = mutableMapOf<Int, MutableList<EpisodeSource>>()
                 val episodePosters = mutableMapOf<Int, String?>()
 
                 for (translation in translations) {
                     val translationId = translation.translation.id
+                    android.util.Log.d(TAG, "Translation: id=$translationId name=${translation.translation.name} players=${translation.player.size}")
+
                     for (player in translation.player) {
+                        android.util.Log.d(TAG, "  Player: id=${player.id} name=${player.name} episodesCount=${player.episodesCount}")
+
                         val collected = mutableListOf<FundubEpisode>()
                         val seenIds = mutableSetOf<Int>()
                         val baseUrl = "$mainUrl/api/player/$animeId/episodes?take=100&playerId=${player.id}&translationId=$translationId"
@@ -475,6 +490,8 @@ class AnimeONProvider : MainAPI() {
                             skip += 100
                         }
 
+                        android.util.Log.d(TAG, "  Collected ${collected.size} episodes for player=${player.name}")
+
                         for (ep in collected) {
                             episodeSources.getOrPut(ep.episode) { mutableListOf() }.add(
                                 EpisodeSource(
@@ -485,36 +502,65 @@ class AnimeONProvider : MainAPI() {
                                 )
                             )
                             val poster = ep.poster
-                            if (!poster.isNullOrEmpty() && !poster.contains("mooncdn.space") && !poster.contains("mooncdn.online") && !poster.contains("mooncdn.net") && !episodePosters.containsKey(ep.episode)) {
-                                episodePosters[ep.episode] = poster
+                            android.util.Log.d(TAG, "  EP ${ep.episode} | poster=$poster | videoUrl=${ep.videoUrl} | fileUrl=${ep.fileUrl}")
+
+                            if (!poster.isNullOrEmpty()) {
+                                val isBadDomain = poster.contains("mooncdn.space")
+                                    || poster.contains("mooncdn.online")
+                                    || poster.contains("mooncdn.net")
+                                if (isBadDomain) {
+                                    android.util.Log.w(TAG, "  EP ${ep.episode} | poster REJECTED (bad domain): $poster")
+                                } else if (episodePosters.containsKey(ep.episode)) {
+                                    android.util.Log.d(TAG, "  EP ${ep.episode} | poster SKIPPED (already have one): ${episodePosters[ep.episode]}")
+                                } else {
+                                    episodePosters[ep.episode] = poster
+                                    android.util.Log.d(TAG, "  EP ${ep.episode} | poster ACCEPTED: $poster")
+                                }
+                            } else {
+                                android.util.Log.d(TAG, "  EP ${ep.episode} | poster is null/empty")
                             }
                         }
-                    } 
-                } 
+                    }
+                }
+
+                android.util.Log.d(TAG, "episodeSources keys=${episodeSources.keys.sorted()}")
+                android.util.Log.d(TAG, "episodePosters count=${episodePosters.size} keys=${episodePosters.keys.sorted()}")
 
                 episodeSources.keys.sorted().forEach { epNum ->
                     val sources = episodeSources[epNum] ?: return@forEach
                     var epPoster = episodePosters[epNum]
 
-                    if (epPoster.isNullOrEmpty()) {
-    // Спочатку пробуємо Moon (там правильні постери з moonanime.art/content)
-    val moonSource = sources.firstOrNull {
-        !it.videoUrl.isNullOrEmpty() && it.videoUrl.contains("moonanime.art")
-    }
-    if (moonSource != null) {
-        epPoster = getMoonPoster(moonSource.videoUrl!!)
-    }
+                    android.util.Log.d(TAG, "EP $epNum | initial epPoster=$epPoster | sources count=${sources.size}")
 
-    // Якщо Moon не дав результату — пробуємо Ashdi
-    if (epPoster.isNullOrEmpty()) {
-        val ashdiSource = sources.firstOrNull {
-            it.playerName.contains("Ashdi", ignoreCase = true) && !it.videoUrl.isNullOrEmpty()
-        }
-        if (ashdiSource != null) {
-            epPoster = getAshdiPoster(ashdiSource.videoUrl!!)
-        }
-    }
+                    if (epPoster.isNullOrEmpty()) {
+                        android.util.Log.d(TAG, "EP $epNum | no poster from API, trying Moon/Ashdi fallback")
+
+                        val moonSource = sources.firstOrNull {
+                            !it.videoUrl.isNullOrEmpty() && it.videoUrl.contains("moonanime.art")
+                        }
+                        android.util.Log.d(TAG, "EP $epNum | moonSource videoUrl=${moonSource?.videoUrl}")
+
+                        if (moonSource != null) {
+                            epPoster = getMoonPoster(moonSource.videoUrl!!)
+                            android.util.Log.d(TAG, "EP $epNum | getMoonPoster result=$epPoster")
+                        }
+
+                        if (epPoster.isNullOrEmpty()) {
+                            val ashdiSource = sources.firstOrNull {
+                                it.playerName.contains("Ashdi", ignoreCase = true) && !it.videoUrl.isNullOrEmpty()
+                            }
+                            android.util.Log.d(TAG, "EP $epNum | ashdiSource videoUrl=${ashdiSource?.videoUrl}")
+
+                            if (ashdiSource != null) {
+                                epPoster = getAshdiPoster(ashdiSource.videoUrl!!)
+                                android.util.Log.d(TAG, "EP $epNum | getAshdiPoster result=$epPoster")
+                            }
+                        }
+                    } else {
+                        android.util.Log.d(TAG, "EP $epNum | poster from API: $epPoster")
                     }
+
+                    android.util.Log.d(TAG, "EP $epNum | FINAL posterUrl=$epPoster")
 
                     val dataJson = org.json.JSONArray().also { arr ->
                         sources.forEach { s ->
@@ -539,8 +585,13 @@ class AnimeONProvider : MainAPI() {
                 }
 
             } catch (e: Exception) {
+                android.util.Log.e(TAG, "Exception in load() episode parsing", e)
             }
+        } else {
+            android.util.Log.w(TAG, "translationsJson is null for animeId=$animeId")
         }
+
+        android.util.Log.d(TAG, "Total episodes built: ${episodes.size}")
 
         val franchise = buildFranchise(animeId)
 
