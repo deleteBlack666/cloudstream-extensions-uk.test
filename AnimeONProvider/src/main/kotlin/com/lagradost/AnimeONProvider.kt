@@ -282,6 +282,52 @@ private val TAG = "AnimeON"
         }
     }
 
+private suspend fun getMoonPoster(iframeUrl: String): String? {
+        if (!iframeUrl.contains("/iframe/")) {
+            Log.d(TAG, "getMoonPoster: НЕ iframe: $iframeUrl")
+            return null
+        }
+
+        val cleanUrl = if (iframeUrl.contains("player=")) iframeUrl
+            else "$iframeUrl${if (iframeUrl.contains("?")) "&" else "?"}player=animeon.club"
+        Log.d(TAG, "getMoonPoster: запит $cleanUrl")
+
+        return try {
+            val html = app.get(cleanUrl, headers = mapOf(
+                "User-Agent"                to userAgent,
+                "Accept"                    to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language"           to "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
+                "Referer"                   to "https://animeon.club/",
+                "X-Requested-With"          to "mark.via.gp",
+                "Sec-Fetch-Site"            to "none",
+                "Sec-Fetch-Mode"            to "navigate",
+                "Sec-Fetch-User"            to "?1",
+                "Sec-Fetch-Dest"            to "document",
+                "Upgrade-Insecure-Requests" to "1"
+            ), cacheTime = 0).text
+
+            Log.d(TAG, "getMoonPoster: HTML len=${html.length}")
+
+            val atobMatch = Regex("""atob\s*\(\s*["']([^"']+)["']\s*\)""")
+                .find(html)?.groupValues?.get(1)
+            Log.d(TAG, "getMoonPoster: atob=${if (atobMatch != null) "OK(${atobMatch.length})" else "NULL"}")
+
+            if (atobMatch.isNullOrEmpty()) return null
+
+            val decodedJs = moonOuterDecode(atobMatch)
+            Log.d(TAG, "getMoonPoster: decoded len=${decodedJs.length} start=${decodedJs.take(150)}")
+
+            if (decodedJs.isEmpty()) return null
+
+            val poster = Regex("""poster\s*:\s*["'](https?://[^"']+)["']""")
+                .find(decodedJs)?.groupValues?.get(1)
+            Log.d(TAG, "getMoonPoster: poster=$poster")
+            poster
+        } catch (e: Exception) {
+            Log.d(TAG, "getMoonPoster: ERROR ${e.message}")
+            null
+        }
+                  }
     
     private suspend fun resolveMoonContent(contentUrl: String): String? {
         return try {
