@@ -496,27 +496,30 @@ class AnimeONProvider : MainAPI() {
                     val sources = episodeSources[epNum] ?: return@forEach
                     var epPoster = episodePosters[epNum]
 
+                    // 1. Спочатку перевіряємо через Moon
                     if (epPoster.isNullOrEmpty()) {
+                        val moonSource = sources.firstOrNull {
+                            !it.videoUrl.isNullOrEmpty() && it.videoUrl.contains("moonanime.art")
+                        }
+                        if (moonSource != null) {
+                            epPoster = getMoonPoster(moonSource.videoUrl!!)
+                        }
+                    }
+
+                    // 2. Якщо Moon нічого не дав, або повернув мертвий лінк, шукаємо через Ashdi
+                    if (epPoster.isNullOrEmpty() || (epPoster != null && epPoster.contains("mooncdn."))) {
                         val ashdiSource = sources.firstOrNull {
                             it.playerName.contains("Ashdi", ignoreCase = true) && !it.videoUrl.isNullOrEmpty()
                         }
                         
                         if (ashdiSource != null) {
                             epPoster = getAshdiPoster(ashdiSource.videoUrl!!)
-                            // Фільтр мертвого CDN з Ashdi
-                            if (epPoster != null && epPoster.contains("mooncdn.")) {
-                                epPoster = null
-                            }
-                        } 
-                        
-                        if (epPoster.isNullOrEmpty()) {
-                            val moonSource = sources.firstOrNull {
-                                !it.videoUrl.isNullOrEmpty() && it.videoUrl.contains("moonanime.art")
-                            }
-                            if (moonSource != null) {
-                                epPoster = getMoonPoster(moonSource.videoUrl!!)
-                            }
                         }
+                    }
+
+                    // 3. Глобальний фільтр перед створенням епізоду: якщо залишився мертвий лінк - видаляємо
+                    if (epPoster != null && epPoster.contains("mooncdn.")) {
+                        epPoster = null
                     }
 
                     val dataJson = org.json.JSONArray().also { arr ->
