@@ -286,6 +286,7 @@ class AnimeONProvider : MainAPI() {
         if (posterProxyPort != 0) return
         val serverSocket = java.net.ServerSocket(0)
         posterProxyPort = serverSocket.localPort
+        Log.d(TAG, "ensurePosterProxy: запущено на порту $posterProxyPort")
         Thread {
             while (!serverSocket.isClosed) {
                 try {
@@ -358,23 +359,41 @@ class AnimeONProvider : MainAPI() {
                 }
             }
 
-            if (posterUrl == null) return null
+            if (posterUrl == null) {
+                Log.d(TAG, "getMoonPoster: posterUrl NULL")
+                return null
+            }
 
-            // Завантажуємо зображення з Referer і віддаємо через локальний проксі
-            val imgBytes = app.get(posterUrl, headers = mapOf(
-                "User-Agent" to userAgent,
-                "Referer" to "https://moonanime.art/",
-                "Origin" to "https://moonanime.art",
-                "Accept" to "image/webp,image/*,*/*",
-            ), cacheTime = 0).body.bytes()
+            Log.d(TAG, "getMoonPoster: posterUrl=$posterUrl, завантажую...")
 
-            if (imgBytes.isEmpty()) return posterUrl
+            // Завантажуємо зображення з правильними headers
+            val imgBytes = try {
+                app.get(posterUrl, headers = mapOf(
+                    "User-Agent" to userAgent,
+                    "Referer" to "https://moonanime.art/",
+                    "Origin" to "https://moonanime.art",
+                    "Accept" to "image/webp,image/*,*/*",
+                ), cacheTime = 0).body.bytes()
+            } catch (e: Exception) {
+                Log.e(TAG, "getMoonPoster: помилка завантаження img: ${e.message}")
+                return posterUrl
+            }
+
+            Log.d(TAG, "getMoonPoster: imgBytes.size=${imgBytes.size}")
+
+            if (imgBytes.isEmpty()) {
+                Log.w(TAG, "getMoonPoster: imgBytes порожні, повертаю прямий URL")
+                return posterUrl
+            }
 
             ensurePosterProxy()
             val key = java.util.UUID.randomUUID().toString().replace("-", "")
             posterCache[key] = imgBytes
-            "http://127.0.0.1:$posterProxyPort/poster?$key"
+            val proxyUrl = "http://127.0.0.1:$posterProxyPort/poster?$key"
+            Log.d(TAG, "getMoonPoster: proxyUrl=$proxyUrl")
+            proxyUrl
         } catch (e: Exception) {
+            Log.e(TAG, "getMoonPoster: критична помилка: ${e.message}")
             null
         }
     }
@@ -562,10 +581,16 @@ class AnimeONProvider : MainAPI() {
                     val sources = episodeSources[epNum] ?: return@forEach
                     var epPoster: String? = null
 
+                    Log.d(TAG, "=== ЕП $epNum === sources=${sources.size}")
+                    sources.forEachIndexed { i, s ->
+                        Log.d(TAG, "  [$i] ${s.playerName} video=${s.videoUrl?.take(50)} apiPoster=${s.apiPoster?.take(60)}")
+                    }
+
                     // 1. Moon API poster (без мертвого CDN)
                     epPoster = sources.firstNotNullOfOrNull { s ->
                         s.apiPoster?.takeIf { !it.contains("mooncdn.") && s.videoUrl?.contains("moonanime.art") == true }
                     }
+                    Log.d(TAG, "  Крок1: $epPoster")
 
                     // 2. Moon iframe → декодування → проксі
                     if (epPoster.isNullOrEmpty()) {
@@ -574,6 +599,7 @@ class AnimeONProvider : MainAPI() {
                         }
                         if (moonSource != null) {
                             epPoster = getMoonPoster(moonSource.videoUrl!!)
+                            Log.d(TAG, "  Крок2: $epPoster")
                         }
                     }
 
@@ -582,6 +608,7 @@ class AnimeONProvider : MainAPI() {
                         epPoster = sources.firstNotNullOfOrNull { s ->
                             s.apiPoster?.takeIf { !it.contains("mooncdn.") && s.playerName.contains("Ashdi", ignoreCase = true) }
                         }
+                        Log.d(TAG, "  Крок3: $epPoster")
                     }
 
                     // 4. Ashdi iframe
@@ -591,6 +618,7 @@ class AnimeONProvider : MainAPI() {
                         }
                         if (ashdiSource != null) {
                             epPoster = getAshdiPoster(ashdiSource.videoUrl!!)
+                            Log.d(TAG, "  Крок4: $epPoster")
                         }
                     }
 
@@ -599,12 +627,15 @@ class AnimeONProvider : MainAPI() {
                         epPoster = sources.firstNotNullOfOrNull { s ->
                             s.apiPoster?.takeIf { !it.contains("mooncdn.") }
                         }
+                        Log.d(TAG, "  Крок5: $epPoster")
                     }
 
                     // 6. Фінальний фільтр
                     if (epPoster != null && epPoster.contains("mooncdn.")) {
                         epPoster = null
                     }
+
+                    Log.d(TAG, "  ФІНАЛ ЕП $epNum: posterUrl=$epPoster")
 
                     val dataJson = org.json.JSONArray().also { arr ->
                         sources.forEach { s ->
@@ -629,6 +660,7 @@ class AnimeONProvider : MainAPI() {
                 }
 
             } catch (e: Exception) {
+                Log.e(TAG, "load: помилка обробки епізодів: ${e.message}")
             }
         }
 
