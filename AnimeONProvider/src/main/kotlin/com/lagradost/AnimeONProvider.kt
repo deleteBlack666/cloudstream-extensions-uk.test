@@ -291,6 +291,18 @@ class AnimeONProvider : MainAPI() {
     
     private var posterProxyPort: Int = 0
     private val posterCache = java.util.concurrent.ConcurrentHashMap<String, ByteArray>()
+    private val moonPosterCache = java.util.concurrent.ConcurrentHashMap<String, String>()
+
+    private fun getPosterCacheDir(): java.io.File {
+        val ctx = android.app.ActivityThread.currentApplication().applicationContext
+        val dir = java.io.File(ctx.cacheDir, "animeon_posters")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    private fun cacheKeyFor(url: String): String {
+        return Integer.toHexString(url.hashCode())
+    }
 
     private fun ensurePosterProxy() {
         if (posterProxyPort != 0) return
@@ -326,6 +338,23 @@ class AnimeONProvider : MainAPI() {
 
         val cleanUrl = if (iframeUrl.contains("player=")) iframeUrl
             else "$iframeUrl${if (iframeUrl.contains("?")) "&" else "?"}player=animeon.club"
+
+        // Кеш в пам'яті (та сама сесія)
+        moonPosterCache[cleanUrl]?.let { return it }
+
+        // Кеш на диску (між запусками)
+        val fileKey = cacheKeyFor(cleanUrl)
+        val cacheFile = java.io.File(getPosterCacheDir(), "$fileKey.webp")
+        if (cacheFile.exists() && cacheFile.length() > 1000) {
+            val bytes = cacheFile.readBytes()
+            ensurePosterProxy()
+            val key = java.util.UUID.randomUUID().toString().replace("-", "")
+            posterCache[key] = bytes
+            val proxyUrl = "http://127.0.0.1:$posterProxyPort/poster?$key"
+            moonPosterCache[cleanUrl] = proxyUrl
+            Log.d(TAG, "getMoonPoster: ДИСКОВИЙ КЕШ ${bytes.size} байт")
+            return proxyUrl
+        }
 
         return try {
             val html = app.get(cleanUrl, headers = mapOf(
@@ -374,18 +403,23 @@ class AnimeONProvider : MainAPI() {
                 "Referer" to "https://moonanime.art/",
                 "Origin" to "https://moonanime.art",
                 "Accept" to "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
-                "Accept-Language" to "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
                 "Sec-Fetch-Site" to "same-site",
                 "Sec-Fetch-Mode" to "no-cors",
                 "Sec-Fetch-Dest" to "image",
             ), cookies = cookies, cacheTime = 0).body.bytes()
 
-            if (imgBytes.size < 1000) return posterUrl
+            if (imgBytes.size < 1000) return null
+
+            // Зберігаємо на диск
+            try { cacheFile.writeBytes(imgBytes) } catch (e: Exception) { }
 
             ensurePosterProxy()
             val key = java.util.UUID.randomUUID().toString().replace("-", "")
             posterCache[key] = imgBytes
-            "http://127.0.0.1:$posterProxyPort/poster?$key"
+            val proxyUrl = "http://127.0.0.1:$posterProxyPort/poster?$key"
+            moonPosterCache[cleanUrl] = proxyUrl
+            Log.d(TAG, "getMoonPoster: МЕРЕЖА ${imgBytes.size} байт -> збережено на диск")
+            proxyUrl
         } catch (e: Exception) {
             null
         }
