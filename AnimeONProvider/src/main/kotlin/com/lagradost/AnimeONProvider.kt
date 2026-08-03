@@ -49,7 +49,8 @@ class AnimeONProvider : MainAPI() {
                 chain.proceed(request)
             }
         }
-
+    } 
+    
     override val supportedTypes = setOf(
         TvType.Anime,
         TvType.AnimeMovie,
