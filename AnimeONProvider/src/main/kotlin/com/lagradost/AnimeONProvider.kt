@@ -281,7 +281,8 @@ class AnimeONProvider : MainAPI() {
     // ==================== POSTER PROXY ====================
     private var posterProxyPort: Int = 0
     private val posterCache = java.util.concurrent.ConcurrentHashMap<String, ByteArray>()
-
+    private val moonPosterCache = java.util.concurrent.ConcurrentHashMap<String, String>() // iframeUrl -> proxyUrl
+    
     private fun ensurePosterProxy() {
         if (posterProxyPort != 0) return
         val serverSocket = java.net.ServerSocket(0)
@@ -313,11 +314,17 @@ class AnimeONProvider : MainAPI() {
     }
     // ======================================================
 
-    private suspend fun getMoonPoster(iframeUrl: String): String? {
+private suspend fun getMoonPoster(iframeUrl: String): String? {
         if (!iframeUrl.contains("/iframe/")) return null
 
         val cleanUrl = if (iframeUrl.contains("player=")) iframeUrl
             else "$iframeUrl${if (iframeUrl.contains("?")) "&" else "?"}player=animeon.club"
+
+        // Кеш: не робимо повторних запитів для того самого iframe
+        moonPosterCache[cleanUrl]?.let {
+            Log.d(TAG, "getMoonPoster: КЕШ -> $it")
+            return it
+        }
 
         return try {
             val html = app.get(cleanUrl, headers = mapOf(
@@ -342,12 +349,10 @@ class AnimeONProvider : MainAPI() {
                 val decoded = moonOuterDecode(match.groupValues[1])
                 if (!decoded.contains("poster")) continue
 
-                // Прямий URL
                 posterUrl = Regex("""poster\s*:\s*["'](https?://[^"']+)["']""")
                     .find(decoded)?.groupValues?.get(1)
                 if (posterUrl != null) break
 
-                // Зашифрований через _0xd
                 val xorKey = Regex("""var\s+k\s*=\s*["']([^"']+)["']""")
                     .find(decoded)?.groupValues?.get(1) ?: continue
                 val posterEnc = Regex("""poster\s*:\s*_0xd\s*\(\s*["']([^"']+)["']\s*\)""")
@@ -359,34 +364,16 @@ class AnimeONProvider : MainAPI() {
                 }
             }
 
-            if (posterUrl == null) {
-                Log.d(TAG, "getMoonPoster: posterUrl NULL")
-                return null
-            }
+            if (posterUrl == null) return null
 
-            Log.d(TAG, "getMoonPoster: posterUrl=$posterUrl, завантажую...")
+            Log.d(TAG, "getMoonPoster: posterUrl=$posterUrl")
 
-            // Спочатку отримуємо cookies з moonanime.art
             val cookieResp = app.get("https://moonanime.art/", headers = mapOf(
                 "User-Agent" to userAgent,
                 "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             ), cacheTime = 0)
             val cookies = cookieResp.cookies
 
-            val imgResponse = app.get(posterUrl, headers = mapOf(
-                "User-Agent" to userAgent,
-                "Referer" to "https://moonanime.art/",
-                "Origin" to "https://moonanime.art",
-                "Accept" to "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
-                "Accept-Language" to "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
-                "Sec-Fetch-Site" to "same-site",
-                "Sec-Fetch-Mode" to "no-cors",
-                "Sec-Fetch-Dest" to "image",
-            ), cookies = cookies, cacheTime = 0)
-
-            Log.d(TAG, "getMoonPoster: HTTP status=${imgResponse.code}, contentType=${imgResponse.headers["content-type"]}, bodyLen=${imgResponse.body.bytes().size}")
-
-            // Повторно завантажуємо для bytes (бо bytes() споживає stream)
             val imgBytes = app.get(posterUrl, headers = mapOf(
                 "User-Agent" to userAgent,
                 "Referer" to "https://moonanime.art/",
@@ -397,10 +384,8 @@ class AnimeONProvider : MainAPI() {
                 "Sec-Fetch-Dest" to "image",
             ), cookies = cookies, cacheTime = 0).body.bytes()
 
-            Log.d(TAG, "getMoonPoster: imgBytes.size=${imgBytes.size}")
-
             if (imgBytes.size < 1000) {
-                Log.w(TAG, "getMoonPoster: зображення занадто мале, повертаю прямий URL")
+                Log.w(TAG, "getMoonPoster: зображення занадто мале (${imgBytes.size})")
                 return posterUrl
             }
 
@@ -408,13 +393,16 @@ class AnimeONProvider : MainAPI() {
             val key = java.util.UUID.randomUUID().toString().replace("-", "")
             posterCache[key] = imgBytes
             val proxyUrl = "http://127.0.0.1:$posterProxyPort/poster?$key"
-            Log.d(TAG, "getMoonPoster: proxyUrl=$proxyUrl")
+
+            // Зберігаємо в кеш
+            moonPosterCache[cleanUrl] = proxyUrl
+            Log.d(TAG, "getMoonPoster: OK ${imgBytes.size} байт -> $proxyUrl")
             proxyUrl
         } catch (e: Exception) {
-            Log.e(TAG, "getMoonPoster: критична помилка: ${e.message}")
+            Log.e(TAG, "getMoonPoster: помилка: ${e.message}")
             null
         }
-    }
+}
 
     private suspend fun resolveMoonContent(contentUrl: String): String? {
         return try {
