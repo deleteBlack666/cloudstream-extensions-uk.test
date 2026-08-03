@@ -279,20 +279,24 @@ class AnimeONProvider : MainAPI() {
     }
 
 
-    private var moonCookies: Map<String, String>? = null
-
-    private suspend fun getMoonCookies(): Map<String, String> {
-        moonCookies?.let { return it }
-        Log.d(TAG, "getMoonCookies: запитую нові cookies з moonanime.art")
-        val resp = app.get("https://moonanime.art/", headers = mapOf(
-            "User-Agent" to userAgent,
-            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        ), cacheTime = 0)
-        val cookies = resp.cookies
-        Log.d(TAG, "getMoonCookies: отримано ${cookies.size} cookies")
-        moonCookies = cookies
-        return cookies
-    }
+private suspend fun getMoonCookies(): Map<String, String> {
+    moonCookies?.let { return it }
+    Log.d(TAG, "getMoonCookies: запитую нові cookies з moonanime.art")
+    val resp = app.get("https://moonanime.art/", headers = mapOf(
+        "User-Agent" to userAgent,
+        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "Accept-Language" to "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Sec-Fetch-Site" to "none",
+        "Sec-Fetch-Mode" to "navigate",
+        "Sec-Fetch-User" to "?1",
+        "Sec-Fetch-Dest" to "document",
+        "Upgrade-Insecure-Requests" to "1",
+    ), cacheTime = 0)
+    val cookies = resp.cookies
+    Log.d(TAG, "getMoonCookies: отримано ${cookies.size} cookies, HTTP status=${resp.code}")
+    moonCookies = cookies
+    return cookies
+}
     
     private var posterProxyPort: Int = 0
     private val posterCache = java.util.concurrent.ConcurrentHashMap<String, ByteArray>()
