@@ -352,7 +352,6 @@ class AnimeONProvider : MainAPI() {
             posterCache[key] = bytes
             val proxyUrl = "http://127.0.0.1:$posterProxyPort/poster?$key"
             moonPosterCache[cleanUrl] = proxyUrl
-            Log.d(TAG, "getMoonPoster: ДИСКОВИЙ КЕШ ${bytes.size} байт")
             return proxyUrl
         }
 
