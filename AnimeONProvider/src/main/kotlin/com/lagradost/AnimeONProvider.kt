@@ -294,8 +294,7 @@ class AnimeONProvider : MainAPI() {
     private val moonPosterCache = java.util.concurrent.ConcurrentHashMap<String, String>()
 
     private fun getPosterCacheDir(): java.io.File {
-        val ctx = app.applicationContext
-        val dir = java.io.File(ctx.cacheDir, "animeon_posters")
+        val dir = java.io.File(System.getProperty("java.io.tmpdir"), "animeon_posters")
         if (!dir.exists()) dir.mkdirs()
         return dir
     }
