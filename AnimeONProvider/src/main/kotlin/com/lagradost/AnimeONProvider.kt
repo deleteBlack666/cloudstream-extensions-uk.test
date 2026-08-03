@@ -278,7 +278,9 @@ class AnimeONProvider : MainAPI() {
         }
     }
 
+private var moonCookies: Map<String, String>? = null
 
+    
 private suspend fun getMoonCookies(): Map<String, String> {
     moonCookies?.let { return it }
     Log.d(TAG, "getMoonCookies: запитую нові cookies з moonanime.art")
