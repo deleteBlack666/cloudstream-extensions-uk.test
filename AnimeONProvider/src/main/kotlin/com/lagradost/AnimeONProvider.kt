@@ -418,7 +418,7 @@ class AnimeONProvider : MainAPI() {
             posterCache[key] = imgBytes
             val proxyUrl = "http://127.0.0.1:$posterProxyPort/poster?$key"
             moonPosterCache[cleanUrl] = proxyUrl
-            Log.d(TAG, "getMoonPoster: МЕРЕЖА ${imgBytes.size} байт -> збережено на диск")
+            
             proxyUrl
         } catch (e: Exception) {
             null
