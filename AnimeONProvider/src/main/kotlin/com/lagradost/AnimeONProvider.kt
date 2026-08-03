@@ -1,5 +1,6 @@
 package com.lagradost
 
+import android.util.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addMalId
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
@@ -16,6 +17,8 @@ class AnimeONProvider : MainAPI() {
     override var lang = "uk"
     override val hasQuickSearch = true
     override val hasDownloadSupport = true
+
+    private val TAG = "AnimeON"
 
     override fun getVideoInterceptor(extractorLink: ExtractorLink): okhttp3.Interceptor {
         return okhttp3.Interceptor { chain ->
@@ -280,11 +283,13 @@ class AnimeONProvider : MainAPI() {
 
     private suspend fun getMoonCookies(): Map<String, String> {
         moonCookies?.let { return it }
+        Log.d(TAG, "getMoonCookies: запитую нові cookies з moonanime.art")
         val resp = app.get("https://moonanime.art/", headers = mapOf(
             "User-Agent" to userAgent,
             "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         ), cacheTime = 0)
         val cookies = resp.cookies
+        Log.d(TAG, "getMoonCookies: отримано ${cookies.size} cookies")
         moonCookies = cookies
         return cookies
     }
@@ -307,6 +312,7 @@ class AnimeONProvider : MainAPI() {
         if (posterProxyPort != 0) return
         val serverSocket = java.net.ServerSocket(0)
         posterProxyPort = serverSocket.localPort
+        Log.d(TAG, "ensurePosterProxy: запущено на порту $posterProxyPort")
         Thread {
             while (!serverSocket.isClosed) {
                 try {
@@ -333,27 +339,47 @@ class AnimeONProvider : MainAPI() {
     }
 
     private suspend fun getMoonPoster(iframeUrl: String): String? {
-        if (!iframeUrl.contains("/iframe/")) return null
+        if (!iframeUrl.contains("/iframe/")) {
+            Log.w(TAG, "getMoonPoster: URL не містить /iframe/ -> $iframeUrl")
+            return null
+        }
 
         val cleanUrl = if (iframeUrl.contains("player=")) iframeUrl
             else "$iframeUrl${if (iframeUrl.contains("?")) "&" else "?"}player=animeon.club"
 
-        // Кеш в пам'яті (та сама сесія)
-        moonPosterCache[cleanUrl]?.let { return it }
+        Log.d(TAG, "getMoonPoster: ========== ПОЧАТОК ========== url=$cleanUrl")
 
-        // Кеш на диску (між запусками)
+        // 1. Кеш в пам'яті (та сама сесія)
+        moonPosterCache[cleanUrl]?.let { cachedUrl ->
+            Log.d(TAG, "getMoonPoster: ✓ КЕШ В ПАМ'ЯТІ -> $cachedUrl")
+            return cachedUrl
+        }
+        Log.d(TAG, "getMoonPoster: ✗ кеш в пам'яті порожній")
+
+        // 2. Кеш на диску (між запусками)
         val fileKey = cacheKeyFor(cleanUrl)
         val cacheFile = java.io.File(getPosterCacheDir(), "$fileKey.webp")
+        Log.d(TAG, "getMoonPoster: перевірка файлу: ${cacheFile.absolutePath} (exists=${cacheFile.exists()}, size=${cacheFile.length()})")
+
         if (cacheFile.exists() && cacheFile.length() > 1000) {
-            val bytes = cacheFile.readBytes()
-            ensurePosterProxy()
-            val key = java.util.UUID.randomUUID().toString().replace("-", "")
-            posterCache[key] = bytes
-            val proxyUrl = "http://127.0.0.1:$posterProxyPort/poster?$key"
-            moonPosterCache[cleanUrl] = proxyUrl
-            return proxyUrl
+            try {
+                val bytes = cacheFile.readBytes()
+                Log.d(TAG, "getMoonPoster: ✓ ДИСКОВИЙ КЕШ ${bytes.size} байт")
+                ensurePosterProxy()
+                val key = java.util.UUID.randomUUID().toString().replace("-", "")
+                posterCache[key] = bytes
+                val proxyUrl = "http://127.0.0.1:$posterProxyPort/poster?$key"
+                moonPosterCache[cleanUrl] = proxyUrl
+                Log.d(TAG, "getMoonPoster: збережено в пам'ять -> $proxyUrl")
+                return proxyUrl
+            } catch (e: Exception) {
+                Log.e(TAG, "getMoonPoster: помилка читання дискового кешу: ${e.message}")
+            }
+        } else {
+            Log.d(TAG, "getMoonPoster: ✗ файловий кеш відсутній або занадто малий")
         }
 
+        Log.d(TAG, "getMoonPoster: завантажую з мережі...")
         return try {
             val html = app.get(cleanUrl, headers = mapOf(
                 "User-Agent"                to userAgent,
@@ -368,18 +394,31 @@ class AnimeONProvider : MainAPI() {
                 "Upgrade-Insecure-Requests" to "1"
             ), cacheTime = 0).text
 
-            if (html.isEmpty()) return null
+            Log.d(TAG, "getMoonPoster: HTML довжина=${html.length}")
+            if (html.isEmpty()) {
+                Log.w(TAG, "getMoonPoster: HTML порожній")
+                return null
+            }
 
             val atobRegex = Regex("""atob\s*\(\s*["']([^"']+)["']\s*\)""")
             var posterUrl: String? = null
+            var atobCount = 0
 
             for (match in atobRegex.findAll(html)) {
+                atobCount++
                 val decoded = moonOuterDecode(match.groupValues[1])
-                if (!decoded.contains("poster")) continue
+                if (!decoded.contains("poster")) {
+                    Log.d(TAG, "getMoonPoster: atob #$atobCount НЕ містить 'poster'")
+                    continue
+                }
+                Log.d(TAG, "getMoonPoster: atob #$atobCount містить 'poster', decoded.length=${decoded.length}")
 
                 posterUrl = Regex("""poster\s*:\s*["'](https?://[^"']+)["']""")
                     .find(decoded)?.groupValues?.get(1)
-                if (posterUrl != null) break
+                if (posterUrl != null) {
+                    Log.d(TAG, "getMoonPoster: знайдено прямий poster URL")
+                    break
+                }
 
                 val xorKey = Regex("""var\s+k\s*=\s*["']([^"']+)["']""")
                     .find(decoded)?.groupValues?.get(1) ?: continue
@@ -388,12 +427,17 @@ class AnimeONProvider : MainAPI() {
                 val result = moonDecrypt(posterEnc, xorKey)
                 if (result.startsWith("http")) {
                     posterUrl = result
+                    Log.d(TAG, "getMoonPoster: декодовано poster URL через _0xd")
                     break
                 }
             }
 
-            if (posterUrl == null) return null
+            if (posterUrl == null) {
+                Log.w(TAG, "getMoonPoster: не знайдено poster URL в жодному з $atobCount atob блоків")
+                return null
+            }
 
+            Log.d(TAG, "getMoonPoster: завантаження зображення з $posterUrl")
             val cookies = getMoonCookies()
 
             val imgBytes = app.get(posterUrl, headers = mapOf(
@@ -406,19 +450,31 @@ class AnimeONProvider : MainAPI() {
                 "Sec-Fetch-Dest" to "image",
             ), cookies = cookies, cacheTime = 0).body.bytes()
 
-            if (imgBytes.size < 1000) return null
+            Log.d(TAG, "getMoonPoster: завантажено ${imgBytes.size} байт")
+
+            if (imgBytes.size < 1000) {
+                Log.w(TAG, "getMoonPoster: зображення занадто мале (${imgBytes.size} байт), пропускаю")
+                return null
+            }
 
             // Зберігаємо на диск
-            try { cacheFile.writeBytes(imgBytes) } catch (e: Exception) { }
+            try {
+                cacheFile.writeBytes(imgBytes)
+                Log.d(TAG, "getMoonPoster: ✓ збережено на диск: ${cacheFile.absolutePath} (${imgBytes.size} байт)")
+            } catch (e: Exception) {
+                Log.e(TAG, "getMoonPoster: помилка запису на диск: ${e.message}")
+            }
 
             ensurePosterProxy()
             val key = java.util.UUID.randomUUID().toString().replace("-", "")
             posterCache[key] = imgBytes
             val proxyUrl = "http://127.0.0.1:$posterProxyPort/poster?$key"
             moonPosterCache[cleanUrl] = proxyUrl
+            Log.d(TAG, "getMoonPoster: ✓ збережено в пам'ять -> $proxyUrl")
             
             proxyUrl
         } catch (e: Exception) {
+            Log.e(TAG, "getMoonPoster: критична помилка: ${e.message}", e)
             null
         }
     }
