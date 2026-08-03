@@ -276,6 +276,51 @@ class AnimeONProvider : MainAPI() {
     }
 
 
+    private var moonCookies: Map<String, String>? = null
+
+    private suspend fun getMoonCookies(): Map<String, String> {
+        moonCookies?.let { return it }
+        val resp = app.get("https://moonanime.art/", headers = mapOf(
+            "User-Agent" to userAgent,
+            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        ), cacheTime = 0)
+        val cookies = resp.cookies
+        moonCookies = cookies
+        return cookies
+    }
+    
+    private var posterProxyPort: Int = 0
+    private val posterCache = java.util.concurrent.ConcurrentHashMap<String, ByteArray>()
+
+    private fun ensurePosterProxy() {
+        if (posterProxyPort != 0) return
+        val serverSocket = java.net.ServerSocket(0)
+        posterProxyPort = serverSocket.localPort
+        Thread {
+            while (!serverSocket.isClosed) {
+                try {
+                    val client = serverSocket.accept()
+                    Thread {
+                        try {
+                            val line = client.getInputStream().bufferedReader().readLine() ?: return@Thread
+                            val key = line.substringAfter("?").substringBefore(" ")
+                            val body = posterCache[key]
+                            val out = client.getOutputStream()
+                            if (body != null) {
+                                out.write("HTTP/1.1 200 OK\r\nContent-Type: image/webp\r\nContent-Length: ${body.size}\r\nCache-Control: public, max-age=86400\r\nConnection: close\r\n\r\n".toByteArray())
+                                out.write(body)
+                            } else {
+                                out.write("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray())
+                            }
+                            out.flush()
+                            client.close()
+                        } catch (e: Exception) { }
+                    }.also { it.isDaemon = true }.start()
+                } catch (e: Exception) { }
+            }
+        }.also { it.isDaemon = true }.start()
+    }
+
     private suspend fun getMoonPoster(iframeUrl: String): String? {
         if (!iframeUrl.contains("/iframe/")) return null
 
@@ -322,7 +367,25 @@ class AnimeONProvider : MainAPI() {
 
             if (posterUrl == null) return null
 
-            "$posterUrl|Referer=https://moonanime.art/&Origin=https://moonanime.art&User-Agent=$userAgent&Sec-Fetch-Dest=image&Sec-Fetch-Mode=no-cors&Sec-Fetch-Site=same-site"
+            val cookies = getMoonCookies()
+
+            val imgBytes = app.get(posterUrl, headers = mapOf(
+                "User-Agent" to userAgent,
+                "Referer" to "https://moonanime.art/",
+                "Origin" to "https://moonanime.art",
+                "Accept" to "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+                "Accept-Language" to "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
+                "Sec-Fetch-Site" to "same-site",
+                "Sec-Fetch-Mode" to "no-cors",
+                "Sec-Fetch-Dest" to "image",
+            ), cookies = cookies, cacheTime = 0).body.bytes()
+
+            if (imgBytes.size < 1000) return posterUrl
+
+            ensurePosterProxy()
+            val key = java.util.UUID.randomUUID().toString().replace("-", "")
+            posterCache[key] = imgBytes
+            "http://127.0.0.1:$posterProxyPort/poster?$key"
         } catch (e: Exception) {
             null
         }
