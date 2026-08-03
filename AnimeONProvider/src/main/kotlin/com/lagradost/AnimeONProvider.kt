@@ -1,6 +1,5 @@
 package com.lagradost
 
-import android.util.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addMalId
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
@@ -18,39 +17,23 @@ class AnimeONProvider : MainAPI() {
     override val hasQuickSearch = true
     override val hasDownloadSupport = true
 
-    private val TAG = "AnimeON"
-
     override fun getVideoInterceptor(extractorLink: ExtractorLink): okhttp3.Interceptor {
         return okhttp3.Interceptor { chain ->
             val request = chain.request()
             val url = request.url.toString()
-            if (url.contains("moonanime.art") || url.contains("s.moonanime.art")) {
-                val isImage = url.contains(".webp") || url.contains(".jpg") || url.contains(".jpeg") || url.contains(".png")
-                val builder = request.newBuilder()
+            val newRequest = if (url.contains("moonanime.art") || url.contains("s.moonanime.art")) {
+                request.newBuilder()
                     .header("Referer", "https://moonanime.art/")
                     .header("Origin", "https://moonanime.art")
                     .header("User-Agent", userAgent)
-                    .header("Accept-Language", "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7")
-
-                if (isImage) {
-                    builder.header("Accept", "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8")
-                    builder.header("Sec-Fetch-Site", "same-site")
-                    builder.header("Sec-Fetch-Mode", "no-cors")
-                    builder.header("Sec-Fetch-Dest", "image")
-                } else {
-                    builder.header("Accept", "*/*")
-                    builder.header("Sec-Fetch-Site", "cross-site")
-                    builder.header("Sec-Fetch-Mode", "no-cors")
-                    builder.header("Sec-Fetch-Dest", "video")
-                }
-
-                chain.proceed(builder.build())
+                    .build()
             } else {
-                chain.proceed(request)
+                request
             }
+            chain.proceed(newRequest)
         }
-    } 
-    
+    }
+
     override val supportedTypes = setOf(
         TvType.Anime,
         TvType.AnimeMovie,
@@ -292,9 +275,39 @@ class AnimeONProvider : MainAPI() {
         }
     }
 
-    // ======================================================
+    private var posterProxyPort: Int = 0
+    private val posterCache = java.util.concurrent.ConcurrentHashMap<String, ByteArray>()
 
-            private suspend fun getMoonPoster(iframeUrl: String): String? {
+    private fun ensurePosterProxy() {
+        if (posterProxyPort != 0) return
+        val serverSocket = java.net.ServerSocket(0)
+        posterProxyPort = serverSocket.localPort
+        Thread {
+            while (!serverSocket.isClosed) {
+                try {
+                    val client = serverSocket.accept()
+                    Thread {
+                        try {
+                            val line = client.getInputStream().bufferedReader().readLine() ?: return@Thread
+                            val key = line.substringAfter("?").substringBefore(" ")
+                            val body = posterCache[key]
+                            val out = client.getOutputStream()
+                            if (body != null) {
+                                out.write("HTTP/1.1 200 OK\r\nContent-Type: image/webp\r\nContent-Length: ${body.size}\r\nCache-Control: public, max-age=86400\r\nConnection: close\r\n\r\n".toByteArray())
+                                out.write(body)
+                            } else {
+                                out.write("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray())
+                            }
+                            out.flush()
+                            client.close()
+                        } catch (e: Exception) { }
+                    }.also { it.isDaemon = true }.start()
+                } catch (e: Exception) { }
+            }
+        }.also { it.isDaemon = true }.start()
+    }
+
+    private suspend fun getMoonPoster(iframeUrl: String): String? {
         if (!iframeUrl.contains("/iframe/")) return null
 
         val cleanUrl = if (iframeUrl.contains("player=")) iframeUrl
@@ -317,26 +330,56 @@ class AnimeONProvider : MainAPI() {
             if (html.isEmpty()) return null
 
             val atobRegex = Regex("""atob\s*\(\s*["']([^"']+)["']\s*\)""")
+            var posterUrl: String? = null
+
             for (match in atobRegex.findAll(html)) {
                 val decoded = moonOuterDecode(match.groupValues[1])
                 if (!decoded.contains("poster")) continue
 
-                val direct = Regex("""poster\s*:\s*["'](https?://[^"']+)["']""")
+                posterUrl = Regex("""poster\s*:\s*["'](https?://[^"']+)["']""")
                     .find(decoded)?.groupValues?.get(1)
-                if (direct != null) return direct
+                if (posterUrl != null) break
 
                 val xorKey = Regex("""var\s+k\s*=\s*["']([^"']+)["']""")
                     .find(decoded)?.groupValues?.get(1) ?: continue
                 val posterEnc = Regex("""poster\s*:\s*_0xd\s*\(\s*["']([^"']+)["']\s*\)""")
                     .find(decoded)?.groupValues?.get(1) ?: continue
                 val result = moonDecrypt(posterEnc, xorKey)
-                if (result.startsWith("http")) return result
+                if (result.startsWith("http")) {
+                    posterUrl = result
+                    break
+                }
             }
-            null
+
+            if (posterUrl == null) return null
+
+            val cookieResp = app.get("https://moonanime.art/", headers = mapOf(
+                "User-Agent" to userAgent,
+                "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            ), cacheTime = 0)
+            val cookies = cookieResp.cookies
+
+            val imgBytes = app.get(posterUrl, headers = mapOf(
+                "User-Agent" to userAgent,
+                "Referer" to "https://moonanime.art/",
+                "Origin" to "https://moonanime.art",
+                "Accept" to "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+                "Accept-Language" to "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
+                "Sec-Fetch-Site" to "same-site",
+                "Sec-Fetch-Mode" to "no-cors",
+                "Sec-Fetch-Dest" to "image",
+            ), cookies = cookies, cacheTime = 0).body.bytes()
+
+            if (imgBytes.size < 1000) return posterUrl
+
+            ensurePosterProxy()
+            val key = java.util.UUID.randomUUID().toString().replace("-", "")
+            posterCache[key] = imgBytes
+            "http://127.0.0.1:$posterProxyPort/poster?$key"
         } catch (e: Exception) {
             null
         }
-            }
+    }
 
     private suspend fun resolveMoonContent(contentUrl: String): String? {
         return try {
@@ -521,61 +564,43 @@ class AnimeONProvider : MainAPI() {
                     val sources = episodeSources[epNum] ?: return@forEach
                     var epPoster: String? = null
 
-                    Log.d(TAG, "=== ЕП $epNum === sources=${sources.size}")
-                    sources.forEachIndexed { i, s ->
-                        Log.d(TAG, "  [$i] ${s.playerName} video=${s.videoUrl?.take(50)} apiPoster=${s.apiPoster?.take(60)}")
-                    }
-
-                    // 1. Moon API poster (без мертвого CDN)
                     epPoster = sources.firstNotNullOfOrNull { s ->
                         s.apiPoster?.takeIf { !it.contains("mooncdn.") && s.videoUrl?.contains("moonanime.art") == true }
                     }
-                    Log.d(TAG, "  Крок1: $epPoster")
 
-                    // 2. Moon iframe → декодування → проксі
                     if (epPoster.isNullOrEmpty()) {
                         val moonSource = sources.firstOrNull {
                             !it.videoUrl.isNullOrEmpty() && it.videoUrl.contains("moonanime.art")
                         }
                         if (moonSource != null) {
                             epPoster = getMoonPoster(moonSource.videoUrl!!)
-                            Log.d(TAG, "  Крок2: $epPoster")
                         }
                     }
 
-                    // 3. Ashdi API poster
                     if (epPoster.isNullOrEmpty()) {
                         epPoster = sources.firstNotNullOfOrNull { s ->
                             s.apiPoster?.takeIf { !it.contains("mooncdn.") && s.playerName.contains("Ashdi", ignoreCase = true) }
                         }
-                        Log.d(TAG, "  Крок3: $epPoster")
                     }
 
-                    // 4. Ashdi iframe
                     if (epPoster.isNullOrEmpty()) {
                         val ashdiSource = sources.firstOrNull {
                             it.playerName.contains("Ashdi", ignoreCase = true) && !it.videoUrl.isNullOrEmpty()
                         }
                         if (ashdiSource != null) {
                             epPoster = getAshdiPoster(ashdiSource.videoUrl!!)
-                            Log.d(TAG, "  Крок4: $epPoster")
                         }
                     }
 
-                    // 5. Будь-який валідний
                     if (epPoster.isNullOrEmpty()) {
                         epPoster = sources.firstNotNullOfOrNull { s ->
                             s.apiPoster?.takeIf { !it.contains("mooncdn.") }
                         }
-                        Log.d(TAG, "  Крок5: $epPoster")
                     }
 
-                    // 6. Фінальний фільтр
                     if (epPoster != null && epPoster.contains("mooncdn.")) {
                         epPoster = null
                     }
-
-                    Log.d(TAG, "  ФІНАЛ ЕП $epNum: posterUrl=$epPoster")
 
                     val dataJson = org.json.JSONArray().also { arr ->
                         sources.forEach { s ->
@@ -600,7 +625,6 @@ class AnimeONProvider : MainAPI() {
                 }
 
             } catch (e: Exception) {
-                Log.e(TAG, "load: помилка обробки епізодів: ${e.message}")
             }
         }
 
