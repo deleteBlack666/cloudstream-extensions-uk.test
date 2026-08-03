@@ -424,9 +424,8 @@ class AnimeONProvider : MainAPI() {
             }
 
             Log.d(TAG, "getMoonPoster: завантаження зображення з $posterUrl")
-            val cookies = getMoonCookies()
 
-            val imgBytes = app.get(posterUrl, headers = mapOf(
+            val imgResponse = app.get(posterUrl, headers = mapOf(
                 "User-Agent" to userAgent,
                 "Referer" to "https://moonanime.art/",
                 "Origin" to "https://moonanime.art",
@@ -434,15 +433,15 @@ class AnimeONProvider : MainAPI() {
                 "Sec-Fetch-Site" to "same-site",
                 "Sec-Fetch-Mode" to "no-cors",
                 "Sec-Fetch-Dest" to "image",
-            ), cookies = cookies, cacheTime = 0).body.bytes()
+            ), cacheTime = 0)
 
-            Log.d(TAG, "getMoonPoster: завантажено ${imgBytes.size} байт")
+            val imgBytes = imgResponse.body.bytes()
+            Log.d(TAG, "getMoonPoster: HTTP status=${imgResponse.code}, bodyLen=${imgBytes.size}")
 
             if (imgBytes.size < 1000) {
                 Log.w(TAG, "getMoonPoster: зображення занадто мале (${imgBytes.size} байт), пропускаю")
                 return null
             }
-
             // Зберігаємо на диск
             try {
                 cacheFile.writeBytes(imgBytes)
