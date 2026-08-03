@@ -24,18 +24,31 @@ class AnimeONProvider : MainAPI() {
         return okhttp3.Interceptor { chain ->
             val request = chain.request()
             val url = request.url.toString()
-            val newRequest = if (url.contains("moonanime.art") || url.contains("s.moonanime.art")) {
-                request.newBuilder()
+            if (url.contains("moonanime.art") || url.contains("s.moonanime.art")) {
+                val isImage = url.contains(".webp") || url.contains(".jpg") || url.contains(".jpeg") || url.contains(".png")
+                val builder = request.newBuilder()
                     .header("Referer", "https://moonanime.art/")
                     .header("Origin", "https://moonanime.art")
                     .header("User-Agent", userAgent)
-                    .build()
+                    .header("Accept-Language", "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7")
+
+                if (isImage) {
+                    builder.header("Accept", "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8")
+                    builder.header("Sec-Fetch-Site", "same-site")
+                    builder.header("Sec-Fetch-Mode", "no-cors")
+                    builder.header("Sec-Fetch-Dest", "image")
+                } else {
+                    builder.header("Accept", "*/*")
+                    builder.header("Sec-Fetch-Site", "cross-site")
+                    builder.header("Sec-Fetch-Mode", "no-cors")
+                    builder.header("Sec-Fetch-Dest", "video")
+                }
+
+                chain.proceed(builder.build())
             } else {
-                request
+                chain.proceed(request)
             }
-            chain.proceed(newRequest)
         }
-    }
 
     override val supportedTypes = setOf(
         TvType.Anime,
