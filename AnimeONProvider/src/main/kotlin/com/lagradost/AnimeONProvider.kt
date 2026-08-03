@@ -321,12 +321,10 @@ class AnimeONProvider : MainAPI() {
                 val decoded = moonOuterDecode(match.groupValues[1])
                 if (!decoded.contains("poster")) continue
 
-                // Прямий URL
                 val direct = Regex("""poster\s*:\s*["'](https?://[^"']+)["']""")
                     .find(decoded)?.groupValues?.get(1)
                 if (direct != null) return direct
 
-                // Зашифрований через _0xd
                 val xorKey = Regex("""var\s+k\s*=\s*["']([^"']+)["']""")
                     .find(decoded)?.groupValues?.get(1) ?: continue
                 val posterEnc = Regex("""poster\s*:\s*_0xd\s*\(\s*["']([^"']+)["']\s*\)""")
@@ -338,7 +336,7 @@ class AnimeONProvider : MainAPI() {
         } catch (e: Exception) {
             null
         }
-            }        
+            }
 
     private suspend fun resolveMoonContent(contentUrl: String): String? {
         return try {
