@@ -294,7 +294,7 @@ class AnimeONProvider : MainAPI() {
     private val moonPosterCache = java.util.concurrent.ConcurrentHashMap<String, String>()
 
     private fun getPosterCacheDir(): java.io.File {
-        val ctx = com.lagradost.cloudstream3.MainAPI.app.applicationContext
+        val ctx = app.applicationContext
         val dir = java.io.File(ctx.cacheDir, "animeon_posters")
         if (!dir.exists()) dir.mkdirs()
         return dir
