@@ -366,23 +366,41 @@ class AnimeONProvider : MainAPI() {
 
             Log.d(TAG, "getMoonPoster: posterUrl=$posterUrl, завантажую...")
 
-            // Завантажуємо зображення з правильними headers
-            val imgBytes = try {
-                app.get(posterUrl, headers = mapOf(
-                    "User-Agent" to userAgent,
-                    "Referer" to "https://moonanime.art/",
-                    "Origin" to "https://moonanime.art",
-                    "Accept" to "image/webp,image/*,*/*",
-                ), cacheTime = 0).body.bytes()
-            } catch (e: Exception) {
-                Log.e(TAG, "getMoonPoster: помилка завантаження img: ${e.message}")
-                return posterUrl
-            }
+            // Спочатку отримуємо cookies з moonanime.art
+            val cookieResp = app.get("https://moonanime.art/", headers = mapOf(
+                "User-Agent" to userAgent,
+                "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            ), cacheTime = 0)
+            val cookies = cookieResp.cookies
+
+            val imgResponse = app.get(posterUrl, headers = mapOf(
+                "User-Agent" to userAgent,
+                "Referer" to "https://moonanime.art/",
+                "Origin" to "https://moonanime.art",
+                "Accept" to "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+                "Accept-Language" to "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
+                "Sec-Fetch-Site" to "same-site",
+                "Sec-Fetch-Mode" to "no-cors",
+                "Sec-Fetch-Dest" to "image",
+            ), cookies = cookies, cacheTime = 0)
+
+            Log.d(TAG, "getMoonPoster: HTTP status=${imgResponse.code}, contentType=${imgResponse.headers["content-type"]}, bodyLen=${imgResponse.body.bytes().size}")
+
+            // Повторно завантажуємо для bytes (бо bytes() споживає stream)
+            val imgBytes = app.get(posterUrl, headers = mapOf(
+                "User-Agent" to userAgent,
+                "Referer" to "https://moonanime.art/",
+                "Origin" to "https://moonanime.art",
+                "Accept" to "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+                "Sec-Fetch-Site" to "same-site",
+                "Sec-Fetch-Mode" to "no-cors",
+                "Sec-Fetch-Dest" to "image",
+            ), cookies = cookies, cacheTime = 0).body.bytes()
 
             Log.d(TAG, "getMoonPoster: imgBytes.size=${imgBytes.size}")
 
-            if (imgBytes.isEmpty()) {
-                Log.w(TAG, "getMoonPoster: imgBytes порожні, повертаю прямий URL")
+            if (imgBytes.size < 1000) {
+                Log.w(TAG, "getMoonPoster: зображення занадто мале, повертаю прямий URL")
                 return posterUrl
             }
 
