@@ -307,6 +307,19 @@ class AnimeONProvider : MainAPI() {
         }.also { it.isDaemon = true }.start()
     }
 
+    private var moonCookies: Map<String, String>? = null
+
+    private suspend fun getMoonCookies(): Map<String, String> {
+        moonCookies?.let { return it }
+        val resp = app.get("https://moonanime.art/", headers = mapOf(
+            "User-Agent" to userAgent,
+            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        ), cacheTime = 0)
+        val cookies = resp.cookies
+        moonCookies = cookies
+        return cookies
+    }
+    
     private suspend fun getMoonPoster(iframeUrl: String): String? {
         if (!iframeUrl.contains("/iframe/")) return null
 
@@ -357,7 +370,7 @@ class AnimeONProvider : MainAPI() {
                 "User-Agent" to userAgent,
                 "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             ), cacheTime = 0)
-            val cookies = cookieResp.cookies
+            val cookies = getMoonCookies()
 
             val imgBytes = app.get(posterUrl, headers = mapOf(
                 "User-Agent" to userAgent,
