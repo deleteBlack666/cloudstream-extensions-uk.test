@@ -694,7 +694,6 @@ class AnimeONProvider : MainAPI() {
                                 this.posterHeaders = posterHeaders
                             }
                         }
-                    )
                     
         val franchise = buildFranchise(animeId)
 
