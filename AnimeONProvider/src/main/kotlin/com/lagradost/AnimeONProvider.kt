@@ -1,6 +1,5 @@
 package com.lagradost
 
-import android.util.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addMalId
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
@@ -17,8 +16,6 @@ class AnimeONProvider : MainAPI() {
     override var lang = "uk"
     override val hasQuickSearch = true
     override val hasDownloadSupport = true
-
-    private val TAG = "AnimeOn"
 
     override fun getVideoInterceptor(extractorLink: ExtractorLink): okhttp3.Interceptor {
         return okhttp3.Interceptor { chain ->
@@ -48,7 +45,6 @@ class AnimeONProvider : MainAPI() {
     private val apiUrl = "$mainUrl/api/anime"
     private val posterApi = "$mainUrl/api/uploads/images/%s"
     private val searchApi = "$mainUrl/api/anime?search="
-
     private val userAgent =
         "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Mobile Safari/537.36"
 
@@ -196,39 +192,6 @@ class AnimeONProvider : MainAPI() {
         )
     }
 
-    private fun applyPosterHeaders(target: Any, headers: Map<String, String>) {
-        try {
-            val setter = target.javaClass.methods.firstOrNull { method ->
-                method.name == "setPosterHeaders" && method.parameterTypes.size == 1
-            }
-
-            if (setter != null) {
-                setter.invoke(target, headers)
-                Log.e(TAG, "posterHeaders applied via setter")
-                return
-            }
-
-            var cls: Class<*>? = target.javaClass
-
-            while (cls != null) {
-                val field = cls.declaredFields.firstOrNull { it.name == "posterHeaders" }
-
-                if (field != null) {
-                    field.isAccessible = true
-                    field.set(target, headers)
-                    Log.e(TAG, "posterHeaders applied via field")
-                    return
-                }
-
-                cls = cls.superclass
-            }
-
-            Log.e(TAG, "posterHeaders target not found")
-        } catch (e: Throwable) {
-            Log.e(TAG, "applyPosterHeaders failed", e)
-        }
-    }
-
     private suspend fun buildFranchise(animeId: Int): List<SearchResponse> {
         val json = fetchJsonOrNull("$mainUrl/api/franchise/full/$animeId") ?: return emptyList()
 
@@ -353,6 +316,91 @@ class AnimeONProvider : MainAPI() {
         }
     }
 
+    private var posterProxyPort: Int = 0
+    private val posterCache = java.util.concurrent.ConcurrentHashMap<String, ByteArray>()
+    private val posterSources = java.util.concurrent.ConcurrentHashMap<String, String>()
+
+    @Synchronized
+    private fun ensurePosterProxy() {
+        if (posterProxyPort != 0) return
+
+        val serverSocket = java.net.ServerSocket(0)
+        posterProxyPort = serverSocket.localPort
+
+        Thread {
+            while (!serverSocket.isClosed) {
+                try {
+                    val client = serverSocket.accept()
+
+                    Thread {
+                        try {
+                            val line = client.getInputStream().bufferedReader().readLine() ?: return@Thread
+
+                            // Приклад: GET /poster?ключ HTTP/1.1
+                            val key = line.substringAfter("?").substringBefore(" ").trim()
+                            val originalUrl = posterSources[key]
+
+                            val out = client.getOutputStream()
+
+                            if (originalUrl.isNullOrEmpty()) {
+                                out.write("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray())
+                                out.flush()
+                                return@Thread
+                            }
+
+                            var body = posterCache[originalUrl]
+
+                            if (body == null) {
+                                val fetched = kotlinx.coroutines.runBlocking {
+                                    this@AnimeONProvider.fetchPosterBytes(originalUrl)
+                                }
+
+                                if (fetched.size >= 1000) {
+                                    posterCache[originalUrl] = fetched
+                                    body = fetched
+                                }
+                            }
+
+                            val finalBody = body ?: ByteArray(0)
+
+                            if (finalBody.isEmpty()) {
+                                out.write("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray())
+                            } else {
+                                val contentType = when {
+                                    originalUrl.contains(".png", true) -> "image/png"
+                                    originalUrl.contains(".jpg", true) -> "image/jpeg"
+                                    originalUrl.contains(".jpeg", true) -> "image/jpeg"
+                                    else -> "image/webp"
+                                }
+
+                                out.write(
+                                    (
+                                        "HTTP/1.1 200 OK\r\n" +
+                                        "Content-Type: $contentType\r\n" +
+                                        "Content-Length: ${finalBody.size}\r\n" +
+                                        "Cache-Control: public, max-age=86400\r\n" +
+                                        "Connection: close\r\n\r\n"
+                                    ).toByteArray()
+                                )
+
+                                out.write(finalBody)
+                            }
+
+                            out.flush()
+                        } catch (e: Exception) {
+                        } finally {
+                            try {
+                                client.close()
+                            } catch (_: Exception) {
+                            }
+                        }
+                    }.also { it.isDaemon = true }.start()
+                } catch (e: Exception) {
+                }
+            }
+        }.also { it.isDaemon = true }.start()
+    }
+
     private var moonCookies: Map<String, String>? = null
 
     private suspend fun getMoonCookies(): Map<String, String> {
@@ -373,46 +421,38 @@ class AnimeONProvider : MainAPI() {
         return cookies
     }
 
-    private fun buildMoonPosterHeaders(cookies: Map<String, String>): Map<String, String> {
-        val headers = mutableMapOf(
-            "User-Agent" to userAgent,
-            "Accept" to "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
-            "Accept-Language" to "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
-            "Referer" to "https://moonanime.art/",
-            "Origin" to "https://moonanime.art",
-            "X-Requested-With" to "mark.via.gp",
-            "Sec-Ch-Ua" to "\"Not=A?Brand\";v=\"99\", \"Android WebView\";v=\"151\", \"Chromium\";v=\"151\"",
-            "Sec-Ch-Ua-Mobile" to "?1",
-            "Sec-Ch-Ua-Platform" to "\"Android\"",
-            "Sec-Fetch-Site" to "same-site",
-            "Sec-Fetch-Mode" to "no-cors",
-            "Sec-Fetch-Dest" to "image"
-        )
+    private suspend fun fetchPosterBytes(originalUrl: String): ByteArray {
+        return try {
+            val cookies = getMoonCookies()
 
-        val cookieHeader = cookies.entries.joinToString("; ") { "${it.key}=${it.value}" }
-
-        if (cookieHeader.isNotBlank()) {
-            headers["Cookie"] = cookieHeader
+            app.get(
+                originalUrl,
+                headers = mapOf(
+                    "User-Agent" to userAgent,
+                    "Referer" to "https://moonanime.art/",
+                    "Origin" to "https://moonanime.art",
+                    "Accept" to "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+                    "Accept-Language" to "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
+                    "Sec-Fetch-Site" to "same-site",
+                    "Sec-Fetch-Mode" to "no-cors",
+                    "Sec-Fetch-Dest" to "image",
+                ),
+                cookies = cookies,
+                cacheTime = 0
+            ).body.bytes()
+        } catch (e: Exception) {
+            ByteArray(0)
         }
-
-        return headers
     }
 
     private suspend fun getMoonPoster(iframeUrl: String): String? {
-        Log.e(TAG, "getMoonPoster input: $iframeUrl")
-
-        if (!iframeUrl.contains("/iframe/")) {
-            Log.e(TAG, "getMoonPoster skipped: URL does not contain /iframe/")
-            return null
-        }
+        if (!iframeUrl.contains("/iframe/")) return null
 
         val cleanUrl = if (iframeUrl.contains("player=")) {
             iframeUrl
         } else {
             "$iframeUrl${if (iframeUrl.contains("?")) "&" else "?"}player=animeon.club"
         }
-
-        Log.e(TAG, "getMoonPoster cleanUrl: $cleanUrl")
 
         return try {
             val html = app.get(
@@ -432,12 +472,7 @@ class AnimeONProvider : MainAPI() {
                 cacheTime = 0
             ).text
 
-            Log.e(TAG, "getMoonPoster html length=${html.length}")
-
-            if (html.isEmpty()) {
-                Log.e(TAG, "getMoonPoster html is empty")
-                return null
-            }
+            if (html.isEmpty()) return null
 
             val atobRegex = Regex("""atob\s*\(\s*["']([^"']+)["']\s*\)""")
             var posterUrl: String? = null
@@ -445,17 +480,12 @@ class AnimeONProvider : MainAPI() {
             for (match in atobRegex.findAll(html)) {
                 val decoded = moonOuterDecode(match.groupValues[1])
 
-                if (!decoded.contains("poster")) {
-                    continue
-                }
+                if (!decoded.contains("poster")) continue
 
                 posterUrl = Regex("""poster\s*:\s*["'](https?://[^"']+)["']""")
                     .find(decoded)?.groupValues?.get(1)
 
-                if (posterUrl != null) {
-                    Log.e(TAG, "getMoonPoster found plain posterUrl: $posterUrl")
-                    break
-                }
+                if (posterUrl != null) break
 
                 val xorKey = Regex("""var\s+k\s*=\s*["']([^"']+)["']""")
                     .find(decoded)?.groupValues?.get(1) ?: continue
@@ -467,16 +497,21 @@ class AnimeONProvider : MainAPI() {
 
                 if (result.startsWith("http")) {
                     posterUrl = result
-                    Log.e(TAG, "getMoonPoster found decrypted posterUrl: $posterUrl")
                     break
                 }
             }
 
-            Log.e(TAG, "getMoonPoster final posterUrl=$posterUrl")
+            if (posterUrl == null) {
+                null
+            } else {
+                ensurePosterProxy()
 
-            posterUrl
+                val key = java.util.UUID.randomUUID().toString().replace("-", "")
+                posterSources[key] = posterUrl
+
+                "http://127.0.0.1:$posterProxyPort/poster?$key"
+            }
         } catch (e: Exception) {
-            Log.e(TAG, "getMoonPoster exception for $cleanUrl", e)
             null
         }
     }
@@ -647,6 +682,7 @@ class AnimeONProvider : MainAPI() {
         }
 
         val episodeInfoMap = fetchEpisodeInfoMap(animeId)
+
         val episodes = mutableListOf<com.lagradost.cloudstream3.Episode>()
         val translationsJson = fetchJsonOrNull("$mainUrl/api/player/$animeId/translations")
 
@@ -720,12 +756,8 @@ class AnimeONProvider : MainAPI() {
                     }
                 }
 
-                var moonPosterHeadersCache: Map<String, String>? = null
-
                 episodeSources.keys.sorted().forEach { epNum ->
                     val sources = episodeSources[epNum] ?: return@forEach
-
-                    Log.e(TAG, "Episode $epNum: sources=${sources.size}")
 
                     var epPoster: String? = null
 
@@ -735,18 +767,13 @@ class AnimeONProvider : MainAPI() {
                         }
                     }
 
-                    Log.e(TAG, "Episode $epNum: moon apiPoster candidate=$epPoster")
-
                     if (epPoster.isNullOrEmpty()) {
                         val moonSource = sources.firstOrNull {
                             !it.videoUrl.isNullOrEmpty() && it.videoUrl.contains("moonanime.art")
                         }
 
-                        Log.e(TAG, "Episode $epNum: moonSource videoUrl=${moonSource?.videoUrl}")
-
                         if (moonSource != null) {
                             epPoster = getMoonPoster(moonSource.videoUrl!!)
-                            Log.e(TAG, "Episode $epNum: getMoonPoster result=$epPoster")
                         }
                     }
 
@@ -756,8 +783,6 @@ class AnimeONProvider : MainAPI() {
                                 !it.contains("mooncdn.") && s.playerName.contains("Ashdi", ignoreCase = true)
                             }
                         }
-
-                        Log.e(TAG, "Episode $epNum: ashdi apiPoster candidate=$epPoster")
                     }
 
                     if (epPoster.isNullOrEmpty()) {
@@ -765,11 +790,8 @@ class AnimeONProvider : MainAPI() {
                             it.playerName.contains("Ashdi", ignoreCase = true) && !it.videoUrl.isNullOrEmpty()
                         }
 
-                        Log.e(TAG, "Episode $epNum: ashdiSource videoUrl=${ashdiSource?.videoUrl}")
-
                         if (ashdiSource != null) {
                             epPoster = getAshdiPoster(ashdiSource.videoUrl!!)
-                            Log.e(TAG, "Episode $epNum: getAshdiPoster result=$epPoster")
                         }
                     }
 
@@ -777,16 +799,11 @@ class AnimeONProvider : MainAPI() {
                         epPoster = sources.firstNotNullOfOrNull { s ->
                             s.apiPoster?.takeIf { !it.contains("mooncdn.") }
                         }
-
-                        Log.e(TAG, "Episode $epNum: fallback apiPoster candidate=$epPoster")
                     }
 
                     if (epPoster != null && epPoster.contains("mooncdn.")) {
-                        Log.e(TAG, "Episode $epNum: rejecting mooncdn poster: $epPoster")
                         epPoster = null
                     }
-
-                    Log.e(TAG, "Episode $epNum: final epPoster=$epPoster")
 
                     val dataJson = org.json.JSONArray().also { arr ->
                         sources.forEach { s ->
@@ -801,33 +818,15 @@ class AnimeONProvider : MainAPI() {
 
                     val episodeName = episodeInfoMap[epNum]?.takeIf { it.isNotBlank() }
 
-                    val posterHeaders: Map<String, String>? = if (epPoster != null && epPoster.contains("moonanime.art")) {
-                        try {
-                            moonPosterHeadersCache ?: buildMoonPosterHeaders(getMoonCookies()).also {
-                                moonPosterHeadersCache = it
-                            }
-                        } catch (e: Exception) {
-                            Log.e(TAG, "Failed to build moon poster headers", e)
-                            null
-                        }
-                    } else {
-                        null
-                    }
-
                     episodes.add(
                         newEpisode(dataJson).apply {
                             this.name = episodeName
                             this.episode = epNum
                             this.posterUrl = epPoster
-
-                            if (posterHeaders != null) {
-                                this@AnimeONProvider.applyPosterHeaders(this, posterHeaders)
-                            }
                         }
                     )
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to build episodes", e)
             }
         }
 
@@ -989,7 +988,6 @@ class AnimeONProvider : MainAPI() {
                     }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "loadLinks source error", e)
             }
         }
 
@@ -1155,7 +1153,6 @@ class AnimeONProvider : MainAPI() {
                                     }
                                 }
                             } catch (e: Exception) {
-                                Log.e(TAG, "loadMovieLinks direct player error", e)
                             }
                         }
 
@@ -1233,13 +1230,11 @@ class AnimeONProvider : MainAPI() {
                                 }
                             }
                         } catch (e: Exception) {
-                            Log.e(TAG, "loadMovieLinks episode error", e)
                         }
                     }
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "loadMovieLinks error", e)
         }
 
         return foundAny
@@ -1423,7 +1418,6 @@ class AnimeONProvider : MainAPI() {
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "processAshdiIframe error", e)
         }
     }
 
@@ -1658,11 +1652,9 @@ class AnimeONProvider : MainAPI() {
                             out.flush()
                             client.close()
                         } catch (e: Exception) {
-                            Log.e(TAG, "Subtitle proxy client error", e)
                         }
                     }.also { it.isDaemon = true }.start()
                 } catch (e: Exception) {
-                    Log.e(TAG, "Subtitle proxy accept error", e)
                 }
             }
         }.also { it.isDaemon = true }.start()
