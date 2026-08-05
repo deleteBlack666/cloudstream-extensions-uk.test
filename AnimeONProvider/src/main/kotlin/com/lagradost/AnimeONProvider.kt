@@ -18,8 +18,6 @@ class AnimeONProvider : MainAPI() {
     override val hasQuickSearch = true
     override val hasDownloadSupport = true
 
-private val TAG = "AnimeON"
-    
     // GA cookies — аналітичні, не сесійні, підходять для moonanime.art
     private val moonGaCookies =
         "_ga=GA1.1.1111259978.1785599959; " +
@@ -1213,7 +1211,7 @@ private val TAG = "AnimeON"
                                 .findAll(subtitleDecoded).toList()
                             if (entryMatches.isNotEmpty()) {
                                 entryMatches.forEach { m ->
-                                    subtitleEntries.add(Pair(m.groupValues[1], m.groupValues[2].trim(',', ' ')))
+                                    subtitleEntries.add(Pair(m.groupValues[1], m.groupValues[2].trim { it == ',' || it == ' ' }))
                                 }
                             } else if (subtitleDecoded.startsWith("http")) {
                                 subtitleEntries.add(Pair("UA", subtitleDecoded.trim()))
