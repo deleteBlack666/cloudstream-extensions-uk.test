@@ -357,9 +357,7 @@ private var moonCookieHeader: String? = null
                             var body = posterCache[originalUrl]
 
                             if (body == null) {
-                                val fetched = kotlinx.coroutines.runBlocking {
-                                    this@AnimeONProvider.fetchPosterBytes(originalUrl)
-                                }
+                                val fetched = fetchPosterBytes(originalUrl)
 
                                 if (fetched.size >= 1000) {
                                     posterCache[originalUrl] = fetched
