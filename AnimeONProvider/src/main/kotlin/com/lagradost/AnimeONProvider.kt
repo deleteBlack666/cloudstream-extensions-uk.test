@@ -670,25 +670,30 @@ if (epNum == 1 && epPoster != null) {
             cacheTime = 0
         )
 
+        // Спочатку читаємо байти
         val bytes = resp.body.bytes()
 
-        val bodyText = try {
-            String(bytes, Charsets.UTF_8).take(200)
-        } catch (e: Exception) {
-            ""
-        }
+        // Логуємо тільки розмір і байти, НЕ логуємо $resp
+        Log.e(TAG, "TEST fetch size=${bytes.size}")
 
-        val firstBytesHex = bytes.take(32).joinToString(" ") {
-            String.format("%02x", it)
-        }
+        if (bytes.size < 1000) {
+            val bodyPreview = try {
+                String(bytes, Charsets.UTF_8).take(200)
+            } catch (e: Exception) {
+                bytes.take(32).joinToString(" ") {
+                    String.format("%02x", it.toInt() and 0xFF)
+                }
+            }
 
-        Log.e(TAG, "TEST fetch URL: $epPoster")
-        Log.e(TAG, "TEST fetch response: $resp")
-        Log.e(TAG, "TEST fetch size: ${bytes.size}")
-        Log.e(TAG, "TEST fetch Content-Type: ${resp.headers["Content-Type"] ?: resp.headers["content-type"]}")
-        Log.e(TAG, "TEST fetch Location: ${resp.headers["Location"] ?: resp.headers["location"]}")
-        Log.e(TAG, "TEST fetch bodyText: $bodyText")
-        Log.e(TAG, "TEST fetch firstBytes: $firstBytesHex")
+            Log.e(TAG, "TEST fetch small body: $bodyPreview")
+            Log.e(TAG, "TEST fetch headers: ${resp.headers}")
+        } else {
+            val firstBytes = bytes.take(16).joinToString(" ") {
+                String.format("%02x", it.toInt() and 0xFF)
+            }
+
+            Log.e(TAG, "TEST fetch first bytes: $firstBytes")
+        }
     } catch (e: Exception) {
         Log.e(TAG, "TEST fetch failed", e)
     }
