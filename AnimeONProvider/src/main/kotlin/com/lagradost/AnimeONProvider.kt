@@ -196,6 +196,39 @@ class AnimeONProvider : MainAPI() {
         )
     }
 
+    private fun applyPosterHeaders(target: Any, headers: Map<String, String>) {
+        try {
+            val setter = target.javaClass.methods.firstOrNull { method ->
+                method.name == "setPosterHeaders" && method.parameterTypes.size == 1
+            }
+
+            if (setter != null) {
+                setter.invoke(target, headers)
+                Log.e(TAG, "posterHeaders applied via setter")
+                return
+            }
+
+            var cls: Class<*>? = target.javaClass
+
+            while (cls != null) {
+                val field = cls.declaredFields.firstOrNull { it.name == "posterHeaders" }
+
+                if (field != null) {
+                    field.isAccessible = true
+                    field.set(target, headers)
+                    Log.e(TAG, "posterHeaders applied via field")
+                    return
+                }
+
+                cls = cls.superclass
+            }
+
+            Log.e(TAG, "posterHeaders target not found")
+        } catch (e: Throwable) {
+            Log.e(TAG, "applyPosterHeaders failed", e)
+        }
+    }
+
     private suspend fun buildFranchise(animeId: Int): List<SearchResponse> {
         val json = fetchJsonOrNull("$mainUrl/api/franchise/full/$animeId") ?: return emptyList()
 
@@ -768,7 +801,7 @@ class AnimeONProvider : MainAPI() {
 
                     val episodeName = episodeInfoMap[epNum]?.takeIf { it.isNotBlank() }
 
-                    val posterHeaders = if (epPoster != null && epPoster.contains("moonanime.art")) {
+                    val posterHeaders: Map<String, String>? = if (epPoster != null && epPoster.contains("moonanime.art")) {
                         try {
                             moonPosterHeadersCache ?: buildMoonPosterHeaders(getMoonCookies()).also {
                                 moonPosterHeadersCache = it
@@ -788,7 +821,7 @@ class AnimeONProvider : MainAPI() {
                             this.posterUrl = epPoster
 
                             if (posterHeaders != null) {
-                                this.posterHeaders = posterHeaders
+                                this@AnimeONProvider.applyPosterHeaders(this, posterHeaders)
                             }
                         }
                     )
