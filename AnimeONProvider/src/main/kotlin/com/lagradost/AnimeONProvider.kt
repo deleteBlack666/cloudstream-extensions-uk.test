@@ -48,6 +48,16 @@ class AnimeONProvider : MainAPI() {
     private val userAgent =
         "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Mobile Safari/537.36"
 
+    private var posterProxyPort: Int = 0
+    private val posterCache = java.util.concurrent.ConcurrentHashMap<String, ByteArray>()
+    private val posterSources = java.util.concurrent.ConcurrentHashMap<String, String>()
+    private var moonCookieHeader: String? = null
+
+    private val posterHttpClient = okhttp3.OkHttpClient.Builder()
+        .connectTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
+        .readTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
+        .build()
+
     private fun currentSeasonLabel(): String {
         val cal = java.util.Calendar.getInstance()
         val month = cal.get(java.util.Calendar.MONTH) + 1
@@ -192,6 +202,155 @@ class AnimeONProvider : MainAPI() {
         )
     }
 
+    @Synchronized
+    private fun ensurePosterProxy() {
+        if (posterProxyPort != 0) return
+
+        val serverSocket = java.net.ServerSocket(0)
+        posterProxyPort = serverSocket.localPort
+
+        Thread {
+            while (!serverSocket.isClosed) {
+                try {
+                    val client = serverSocket.accept()
+
+                    Thread {
+                        try {
+                            val line = client.getInputStream().bufferedReader().readLine() ?: return@Thread
+
+                            // Приклад: GET /poster?ключ HTTP/1.1
+                            val key = line.substringAfter("?").substringBefore(" ").trim()
+                            val originalUrl = posterSources[key]
+
+                            val out = client.getOutputStream()
+
+                            if (originalUrl.isNullOrEmpty()) {
+                                out.write("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray())
+                                out.flush()
+                                return@Thread
+                            }
+
+                            var body = posterCache[originalUrl]
+
+                            if (body == null) {
+                                val fetched = fetchPosterBytes(originalUrl)
+
+                                if (fetched.size >= 1000) {
+                                    posterCache[originalUrl] = fetched
+                                    body = fetched
+                                }
+                            }
+
+                            val finalBody = body ?: ByteArray(0)
+
+                            if (finalBody.isEmpty()) {
+                                out.write("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray())
+                            } else {
+                                val contentType = when {
+                                    originalUrl.contains(".png", true) -> "image/png"
+                                    originalUrl.contains(".jpg", true) -> "image/jpeg"
+                                    originalUrl.contains(".jpeg", true) -> "image/jpeg"
+                                    else -> "image/webp"
+                                }
+
+                                out.write(
+                                    (
+                                        "HTTP/1.1 200 OK\r\n" +
+                                        "Content-Type: $contentType\r\n" +
+                                        "Content-Length: ${finalBody.size}\r\n" +
+                                        "Cache-Control: public, max-age=86400\r\n" +
+                                        "Connection: close\r\n\r\n"
+                                    ).toByteArray()
+                                )
+
+                                out.write(finalBody)
+                            }
+
+                            out.flush()
+                        } catch (e: Exception) {
+                        } finally {
+                            try {
+                                client.close()
+                            } catch (_: Exception) {
+                            }
+                        }
+                    }.also { it.isDaemon = true }.start()
+                } catch (e: Exception) {
+                }
+            }
+        }.also { it.isDaemon = true }.start()
+    }
+
+    private fun getMoonCookieHeader(): String? {
+        moonCookieHeader?.let { return it }
+
+        return try {
+            val request = okhttp3.Request.Builder()
+                .url("https://moonanime.art/")
+                .header("User-Agent", userAgent)
+                .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+                .get()
+                .build()
+
+            val response = posterHttpClient.newCall(request).execute()
+
+            val setCookies = response.headers.toMultimap()["set-cookie"] ?: emptyList()
+
+            response.close()
+
+            val cookiePairs = setCookies.mapNotNull { cookie ->
+                val value = cookie.substringBefore(";").trim()
+                if (value.isNotEmpty()) value else null
+            }
+
+            val header = cookiePairs.joinToString("; ")
+
+            if (header.isNotBlank()) {
+                moonCookieHeader = header
+                header
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun fetchPosterBytes(originalUrl: String): ByteArray {
+        return try {
+            val requestBuilder = okhttp3.Request.Builder()
+                .url(originalUrl)
+                .header("User-Agent", userAgent)
+                .header("Referer", "https://moonanime.art/")
+                .header("Origin", "https://moonanime.art")
+                .header("Accept", "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8")
+                .header("Accept-Language", "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7")
+                .header("Sec-Fetch-Site", "same-site")
+                .header("Sec-Fetch-Mode", "no-cors")
+                .header("Sec-Fetch-Dest", "image")
+                .get()
+
+            getMoonCookieHeader()?.let { cookie ->
+                requestBuilder.header("Cookie", cookie)
+            }
+
+            val response = posterHttpClient.newCall(requestBuilder.build()).execute()
+
+            if (!response.isSuccessful) {
+                response.close()
+                return ByteArray(0)
+            }
+
+            val bytes = response.body?.bytes() ?: ByteArray(0)
+
+            response.close()
+
+            bytes
+        } catch (e: Exception) {
+            ByteArray(0)
+        }
+    }
+
     private suspend fun buildFranchise(animeId: Int): List<SearchResponse> {
         val json = fetchJsonOrNull("$mainUrl/api/franchise/full/$animeId") ?: return emptyList()
 
@@ -316,206 +475,6 @@ class AnimeONProvider : MainAPI() {
         }
     }
 
-    private var posterProxyPort: Int = 0
-    private val posterCache = java.util.concurrent.ConcurrentHashMap<String, ByteArray>()
-    private val posterSources = java.util.concurrent.ConcurrentHashMap<String, String>()
-private var moonCookieHeader: String? = null
-
-    private val posterHttpClient = okhttp3.OkHttpClient.Builder()
-        .connectTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
-        .readTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
-        .build()
-
-    @Synchronized
-    private fun ensurePosterProxy() {
-        if (posterProxyPort != 0) return
-
-        val serverSocket = java.net.ServerSocket(0)
-        posterProxyPort = serverSocket.localPort
-
-        Thread {
-            while (!serverSocket.isClosed) {
-                try {
-                    val client = serverSocket.accept()
-
-                    Thread {
-                        try {
-                            val line = client.getInputStream().bufferedReader().readLine() ?: return@Thread
-
-                            // Приклад: GET /poster?ключ HTTP/1.1
-                            val key = line.substringAfter("?").substringBefore(" ").trim()
-                            val originalUrl = posterSources[key]
-
-                            val out = client.getOutputStream()
-
-                            if (originalUrl.isNullOrEmpty()) {
-                                out.write("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray())
-                                out.flush()
-                                return@Thread
-                            }
-
-                            var body = posterCache[originalUrl]
-
-                            if (body == null) {
-                                val fetched = fetchPosterBytes(originalUrl)
-
-                                if (fetched.size >= 1000) {
-                                    posterCache[originalUrl] = fetched
-                                    body = fetched
-                                }
-                            }
-
-                            val finalBody = body ?: ByteArray(0)
-
-                            if (finalBody.isEmpty()) {
-                                out.write("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray())
-                            } else {
-                                val contentType = when {
-                                    originalUrl.contains(".png", true) -> "image/png"
-                                    originalUrl.contains(".jpg", true) -> "image/jpeg"
-                                    originalUrl.contains(".jpeg", true) -> "image/jpeg"
-                                    else -> "image/webp"
-                                }
-
-                                out.write(
-                                    (
-                                        "HTTP/1.1 200 OK\r\n" +
-                                        "Content-Type: $contentType\r\n" +
-                                        "Content-Length: ${finalBody.size}\r\n" +
-                                        "Cache-Control: public, max-age=86400\r\n" +
-                                        "Connection: close\r\n\r\n"
-                                    ).toByteArray()
-                                )
-
-                                out.write(finalBody)
-                            }
-
-                            out.flush()
-                        } catch (e: Exception) {
-                        } finally {
-                            try {
-                                client.close()
-                            } catch (_: Exception) {
-                            }
-                        }
-                    }.also { it.isDaemon = true }.start()
-                } catch (e: Exception) {
-                }
-            }
-        }.also { it.isDaemon = true }.start()
-    }
-
-    private var moonCookies: Map<String, String>? = null
-
-    private suspend fun getMoonCookies(): Map<String, String> {
-        moonCookies?.let { return it }
-
-        val resp = app.get(
-            "https://moonanime.art/",
-            headers = mapOf(
-                "User-Agent" to userAgent,
-                "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            ),
-            cacheTime = 0
-        )
-
-        val cookies = resp.cookies
-        moonCookies = cookies
-
-        return cookies
-    }
-
-        return try {
-            val cookies = getMoonCookies()
-
-            app.get(
-                originalUrl,
-                headers = mapOf(
-                    "User-Agent" to userAgent,
-                    "Referer" to "https://moonanime.art/",
-                    "Origin" to "https://moonanime.art",
-                    "Accept" to "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
-                    "Accept-Language" to "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
-                    "Sec-Fetch-Site" to "same-site",
-                    "Sec-Fetch-Mode" to "no-cors",
-                    "Sec-Fetch-Dest" to "image",
-                ),
-                cookies = cookies,
-                cacheTime = 0
-            ).body.bytes()
-        } catch (e: Exception) {
-            ByteArray(0)
-        }
-    }
-private fun getMoonCookieHeader(): String? {
-        moonCookieHeader?.let { return it }
-
-        return try {
-            val request = okhttp3.Request.Builder()
-                .url("https://moonanime.art/")
-                .header("User-Agent", userAgent)
-                .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-                .get()
-                .build()
-
-            val response = posterHttpClient.newCall(request).execute()
-
-            val setCookies = response.headers.toMultimap()["set-cookie"] ?: emptyList()
-
-            response.close()
-
-            val cookies = setCookies.mapNotNull { cookie ->
-                cookie.substringBefore(";").trim().takeIf { it.isNotEmpty() }
-            }
-
-            val header = cookies.joinToString("; ")
-
-            if (header.isNotBlank()) {
-                moonCookieHeader = header
-                header
-            } else {
-                null
-            }
-        } catch (e: Exception) {
-            null
-        }
-    }
-
-    private fun fetchPosterBytes(originalUrl: String): ByteArray {
-        return try {
-            val requestBuilder = okhttp3.Request.Builder()
-                .url(originalUrl)
-                .header("User-Agent", userAgent)
-                .header("Referer", "https://moonanime.art/")
-                .header("Origin", "https://moonanime.art")
-                .header("Accept", "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8")
-                .header("Accept-Language", "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7")
-                .header("Sec-Fetch-Site", "same-site")
-                .header("Sec-Fetch-Mode", "no-cors")
-                .header("Sec-Fetch-Dest", "image")
-                .get()
-
-            getMoonCookieHeader()?.let { cookie ->
-                requestBuilder.header("Cookie", cookie)
-            }
-
-            val response = posterHttpClient.newCall(requestBuilder.build()).execute()
-
-            if (!response.isSuccessful) {
-                response.close()
-                return ByteArray(0)
-            }
-
-            val bytes = response.body?.bytes() ?: ByteArray(0)
-
-            response.close()
-
-            bytes
-        } catch (e: Exception) {
-            ByteArray(0)
-        }
-    }
-
     private suspend fun getMoonPoster(iframeUrl: String): String? {
         if (!iframeUrl.contains("/iframe/")) return null
 
@@ -543,44 +502,46 @@ private fun getMoonCookieHeader(): String? {
                 cacheTime = 0
             ).text
 
-            if (html.isEmpty()) return null
-
-            val atobRegex = Regex("""atob\s*\(\s*["']([^"']+)["']\s*\)""")
-            var posterUrl: String? = null
-
-            for (match in atobRegex.findAll(html)) {
-                val decoded = moonOuterDecode(match.groupValues[1])
-
-                if (!decoded.contains("poster")) continue
-
-                posterUrl = Regex("""poster\s*:\s*["'](https?://[^"']+)["']""")
-                    .find(decoded)?.groupValues?.get(1)
-
-                if (posterUrl != null) break
-
-                val xorKey = Regex("""var\s+k\s*=\s*["']([^"']+)["']""")
-                    .find(decoded)?.groupValues?.get(1) ?: continue
-
-                val posterEnc = Regex("""poster\s*:\s*_0xd\s*\(\s*["']([^"']+)["']\s*\)""")
-                    .find(decoded)?.groupValues?.get(1) ?: continue
-
-                val result = moonDecrypt(posterEnc, xorKey)
-
-                if (result.startsWith("http")) {
-                    posterUrl = result
-                    break
-                }
-            }
-
-            if (posterUrl == null) {
+            if (html.isEmpty()) {
                 null
             } else {
-                ensurePosterProxy()
+                val atobRegex = Regex("""atob\s*\(\s*["']([^"']+)["']\s*\)""")
+                var posterUrl: String? = null
 
-                val key = java.util.UUID.randomUUID().toString().replace("-", "")
-                posterSources[key] = posterUrl
+                for (match in atobRegex.findAll(html)) {
+                    val decoded = moonOuterDecode(match.groupValues[1])
 
-                "http://127.0.0.1:$posterProxyPort/poster?$key"
+                    if (!decoded.contains("poster")) continue
+
+                    posterUrl = Regex("""poster\s*:\s*["'](https?://[^"']+)["']""")
+                        .find(decoded)?.groupValues?.get(1)
+
+                    if (posterUrl != null) break
+
+                    val xorKey = Regex("""var\s+k\s*=\s*["']([^"']+)["']""")
+                        .find(decoded)?.groupValues?.get(1) ?: continue
+
+                    val posterEnc = Regex("""poster\s*:\s*_0xd\s*\(\s*["']([^"']+)["']\s*\)""")
+                        .find(decoded)?.groupValues?.get(1) ?: continue
+
+                    val result = moonDecrypt(posterEnc, xorKey)
+
+                    if (result.startsWith("http")) {
+                        posterUrl = result
+                        break
+                    }
+                }
+
+                if (posterUrl == null) {
+                    null
+                } else {
+                    ensurePosterProxy()
+
+                    val key = java.util.UUID.randomUUID().toString().replace("-", "")
+                    posterSources[key] = posterUrl
+
+                    "http://127.0.0.1:$posterProxyPort/poster?$key"
+                }
             }
         } catch (e: Exception) {
             null
