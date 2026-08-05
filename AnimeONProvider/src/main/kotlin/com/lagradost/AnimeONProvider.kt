@@ -319,6 +319,12 @@ class AnimeONProvider : MainAPI() {
     private var posterProxyPort: Int = 0
     private val posterCache = java.util.concurrent.ConcurrentHashMap<String, ByteArray>()
     private val posterSources = java.util.concurrent.ConcurrentHashMap<String, String>()
+private var moonCookieHeader: String? = null
+
+    private val posterHttpClient = okhttp3.OkHttpClient.Builder()
+        .connectTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
+        .readTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
+        .build()
 
     @Synchronized
     private fun ensurePosterProxy() {
@@ -421,7 +427,6 @@ class AnimeONProvider : MainAPI() {
         return cookies
     }
 
-    private suspend fun fetchPosterBytes(originalUrl: String): ByteArray {
         return try {
             val cookies = getMoonCookies()
 
@@ -440,6 +445,74 @@ class AnimeONProvider : MainAPI() {
                 cookies = cookies,
                 cacheTime = 0
             ).body.bytes()
+        } catch (e: Exception) {
+            ByteArray(0)
+        }
+    }
+private fun getMoonCookieHeader(): String? {
+        moonCookieHeader?.let { return it }
+
+        return try {
+            val request = okhttp3.Request.Builder()
+                .url("https://moonanime.art/")
+                .header("User-Agent", userAgent)
+                .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+                .get()
+                .build()
+
+            val response = posterHttpClient.newCall(request).execute()
+
+            val setCookies = response.headers.toMultimap()["set-cookie"] ?: emptyList()
+
+            response.close()
+
+            val cookies = setCookies.mapNotNull { cookie ->
+                cookie.substringBefore(";").trim().takeIf { it.isNotEmpty() }
+            }
+
+            val header = cookies.joinToString("; ")
+
+            if (header.isNotBlank()) {
+                moonCookieHeader = header
+                header
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun fetchPosterBytes(originalUrl: String): ByteArray {
+        return try {
+            val requestBuilder = okhttp3.Request.Builder()
+                .url(originalUrl)
+                .header("User-Agent", userAgent)
+                .header("Referer", "https://moonanime.art/")
+                .header("Origin", "https://moonanime.art")
+                .header("Accept", "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8")
+                .header("Accept-Language", "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7")
+                .header("Sec-Fetch-Site", "same-site")
+                .header("Sec-Fetch-Mode", "no-cors")
+                .header("Sec-Fetch-Dest", "image")
+                .get()
+
+            getMoonCookieHeader()?.let { cookie ->
+                requestBuilder.header("Cookie", cookie)
+            }
+
+            val response = posterHttpClient.newCall(requestBuilder.build()).execute()
+
+            if (!response.isSuccessful) {
+                response.close()
+                return ByteArray(0)
+            }
+
+            val bytes = response.body?.bytes() ?: ByteArray(0)
+
+            response.close()
+
+            bytes
         } catch (e: Exception) {
             ByteArray(0)
         }
