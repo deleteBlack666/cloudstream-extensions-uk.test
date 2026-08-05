@@ -672,54 +672,7 @@ class AnimeONProvider : MainAPI() {
                     }.toString()
 
                     val episodeName = episodeInfoMap[epNum]?.takeIf { it.isNotBlank() }
-if (epNum == 1 && epPoster != null) {
-    try {
-        val cookies = getMoonCookies()
 
-        val resp = app.get(
-            epPoster,
-            headers = mapOf(
-                "User-Agent" to userAgent,
-                "Referer" to "https://moonanime.art/",
-                "Origin" to "https://moonanime.art",
-                "Accept" to "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
-                "Accept-Language" to "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
-                "Sec-Fetch-Site" to "same-site",
-                "Sec-Fetch-Mode" to "no-cors",
-                "Sec-Fetch-Dest" to "image",
-            ),
-            cookies = cookies,
-            cacheTime = 0
-        )
-
-        // Спочатку читаємо байти
-        val bytes = resp.body.bytes()
-
-        // Логуємо тільки розмір і байти, НЕ логуємо $resp
-        Log.e(TAG, "TEST fetch size=${bytes.size}")
-
-        if (bytes.size < 1000) {
-            val bodyPreview = try {
-                String(bytes, Charsets.UTF_8).take(200)
-            } catch (e: Exception) {
-                bytes.take(32).joinToString(" ") {
-                    String.format("%02x", it.toInt() and 0xFF)
-                }
-            }
-
-            Log.e(TAG, "TEST fetch small body: $bodyPreview")
-            Log.e(TAG, "TEST fetch headers: ${resp.headers}")
-        } else {
-            val firstBytes = bytes.take(16).joinToString(" ") {
-                String.format("%02x", it.toInt() and 0xFF)
-            }
-
-            Log.e(TAG, "TEST fetch first bytes: $firstBytes")
-        }
-    } catch (e: Exception) {
-        Log.e(TAG, "TEST fetch failed", e)
-    }
-}
                     val posterHeaders = if (epPoster != null && epPoster.contains("s.moonanime.art")) {
                         try {
                             buildMoonPosterHeaders(getMoonCookies())
@@ -742,6 +695,7 @@ if (epNum == 1 && epPoster != null) {
                             }
                         }
                     )
+                    
         val franchise = buildFranchise(animeId)
 
         return if (tvType == TvType.Anime || tvType == TvType.OVA) {
