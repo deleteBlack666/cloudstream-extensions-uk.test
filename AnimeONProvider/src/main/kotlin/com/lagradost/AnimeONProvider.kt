@@ -1,5 +1,6 @@
 package com.lagradost
 
+import android.util.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addMalId
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
@@ -17,6 +18,8 @@ class AnimeONProvider : MainAPI() {
     override val hasQuickSearch = true
     override val hasDownloadSupport = true
 
+    private val TAG = "AnimeOn"
+    
     override fun getVideoInterceptor(extractorLink: ExtractorLink): okhttp3.Interceptor {
         return okhttp3.Interceptor { chain ->
             val request = chain.request()
@@ -276,71 +279,112 @@ class AnimeONProvider : MainAPI() {
     }
 
     
-    private var moonCookies: Map<String, String>? = null
-
-    private suspend fun getMoonCookies(): Map<String, String> {
-        moonCookies?.let { return it }
-        val resp = app.get("https://moonanime.art/", headers = mapOf(
-            "User-Agent" to userAgent,
-            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        ), cacheTime = 0)
-        val cookies = resp.cookies
-        moonCookies = cookies
-        return cookies
-    }
     
-private suspend fun getMoonPoster(iframeUrl: String): String? {
-        if (!iframeUrl.contains("/iframe/")) return null
+    private suspend fun getMoonPoster(iframeUrl: String): String? {
+        Log.e(TAG, "getMoonPoster input: $iframeUrl")
+
+        if (!iframeUrl.contains("/iframe/")) {
+            Log.e(TAG, "getMoonPoster skipped: URL does not contain /iframe/")
+            return null
+        }
 
         val cleanUrl = if (iframeUrl.contains("player=")) iframeUrl
             else "$iframeUrl${if (iframeUrl.contains("?")) "&" else "?"}player=animeon.club"
 
-        return try {
-            val html = app.get(cleanUrl, headers = mapOf(
-                "User-Agent"                to userAgent,
-                "Accept"                    to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "Accept-Language"           to "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
-                "Referer"                   to "https://animeon.club/",
-                "X-Requested-With"          to "mark.via.gp",
-                "Sec-Fetch-Site"            to "none",
-                "Sec-Fetch-Mode"            to "navigate",
-                "Sec-Fetch-User"            to "?1",
-                "Sec-Fetch-Dest"            to "document",
-                "Upgrade-Insecure-Requests" to "1"
-            ), cacheTime = 0).text
+        Log.e(TAG, "getMoonPoster cleanUrl: $cleanUrl")
 
-            if (html.isEmpty()) return null
+        return try {
+            val html = app.get(
+                cleanUrl,
+                headers = mapOf(
+                    "User-Agent" to userAgent,
+                    "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "Accept-Language" to "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
+                    "Referer" to "https://animeon.club/",
+                    "X-Requested-With" to "mark.via.gp",
+                    "Sec-Fetch-Site" to "none",
+                    "Sec-Fetch-Mode" to "navigate",
+                    "Sec-Fetch-User" to "?1",
+                    "Sec-Fetch-Dest" to "document",
+                    "Upgrade-Insecure-Requests" to "1"
+                ),
+                cacheTime = 0
+            ).text
+
+            Log.e(TAG, "getMoonPoster html length=${html.length}")
+
+            if (html.isEmpty()) {
+                Log.e(TAG, "getMoonPoster html is empty")
+                return null
+            }
 
             val atobRegex = Regex("""atob\s*\(\s*["']([^"']+)["']\s*\)""")
             var posterUrl: String? = null
+            var matchIndex = 0
 
             for (match in atobRegex.findAll(html)) {
-                val decoded = moonOuterDecode(match.groupValues[1])
-                if (!decoded.contains("poster")) continue
+                matchIndex++
+
+                val encoded = match.groupValues[1]
+                val decoded = moonOuterDecode(encoded)
+
+                Log.e(TAG, "getMoonPoster atob #$matchIndex decoded length=${decoded.length}")
+
+                if (!decoded.contains("poster")) {
+                    Log.e(TAG, "getMoonPoster atob #$matchIndex does not contain poster")
+                    continue
+                }
 
                 posterUrl = Regex("""poster\s*:\s*["'](https?://[^"']+)["']""")
                     .find(decoded)?.groupValues?.get(1)
-                if (posterUrl != null) break
+
+                if (posterUrl != null) {
+                    Log.e(TAG, "getMoonPoster found plain posterUrl: $posterUrl")
+                    break
+                }
 
                 val xorKey = Regex("""var\s+k\s*=\s*["']([^"']+)["']""")
-                    .find(decoded)?.groupValues?.get(1) ?: continue
+                    .find(decoded)?.groupValues?.get(1)
+
+                if (xorKey == null) {
+                    Log.e(TAG, "getMoonPoster atob #$matchIndex xorKey not found")
+                    continue
+                }
+
                 val posterEnc = Regex("""poster\s*:\s*_0xd\s*\(\s*["']([^"']+)["']\s*\)""")
-                    .find(decoded)?.groupValues?.get(1) ?: continue
+                    .find(decoded)?.groupValues?.get(1)
+
+                if (posterEnc == null) {
+                    Log.e(TAG, "getMoonPoster atob #$matchIndex encrypted poster not found")
+                    continue
+                }
+
                 val result = moonDecrypt(posterEnc, xorKey)
+
+                Log.e(TAG, "getMoonPoster decrypted candidate: ${result.take(200)}")
+
                 if (result.startsWith("http")) {
                     posterUrl = result
+                    Log.e(TAG, "getMoonPoster found decrypted posterUrl: $posterUrl")
                     break
+                } else {
+                    Log.e(TAG, "getMoonPoster decrypted candidate is not http")
                 }
             }
 
-            if (posterUrl == null) return null
+            Log.e(TAG, "getMoonPoster total atob matches=$matchIndex, final posterUrl=$posterUrl")
 
-            return posterUrl
-
+            if (posterUrl == null) {
+                Log.e(TAG, "getMoonPoster posterUrl is null after parsing")
+                null
+            } else {
+                posterUrl
+            }
         } catch (e: Exception) {
+            Log.e(TAG, "getMoonPoster exception for $cleanUrl", e)
             null
         }
-}
+    }
 
     private suspend fun resolveMoonContent(contentUrl: String): String? {
         return try {
@@ -523,18 +567,27 @@ private suspend fun getMoonPoster(iframeUrl: String): String? {
 
                 episodeSources.keys.sorted().forEach { epNum ->
                     val sources = episodeSources[epNum] ?: return@forEach
+
+                    Log.e(TAG, "Episode $epNum: sources=${sources.size}")
+
                     var epPoster: String? = null
 
                     epPoster = sources.firstNotNullOfOrNull { s ->
                         s.apiPoster?.takeIf { !it.contains("mooncdn.") && s.videoUrl?.contains("moonanime.art") == true }
                     }
 
+                    Log.e(TAG, "Episode $epNum: moon apiPoster candidate=$epPoster")
+
                     if (epPoster.isNullOrEmpty()) {
                         val moonSource = sources.firstOrNull {
                             !it.videoUrl.isNullOrEmpty() && it.videoUrl.contains("moonanime.art")
                         }
+
+                        Log.e(TAG, "Episode $epNum: moonSource videoUrl=${moonSource?.videoUrl}")
+
                         if (moonSource != null) {
                             epPoster = getMoonPoster(moonSource.videoUrl!!)
+                            Log.e(TAG, "Episode $epNum: getMoonPoster result=$epPoster")
                         }
                     }
 
@@ -542,14 +595,20 @@ private suspend fun getMoonPoster(iframeUrl: String): String? {
                         epPoster = sources.firstNotNullOfOrNull { s ->
                             s.apiPoster?.takeIf { !it.contains("mooncdn.") && s.playerName.contains("Ashdi", ignoreCase = true) }
                         }
+
+                        Log.e(TAG, "Episode $epNum: ashdi apiPoster candidate=$epPoster")
                     }
 
                     if (epPoster.isNullOrEmpty()) {
                         val ashdiSource = sources.firstOrNull {
                             it.playerName.contains("Ashdi", ignoreCase = true) && !it.videoUrl.isNullOrEmpty()
                         }
+
+                        Log.e(TAG, "Episode $epNum: ashdiSource videoUrl=${ashdiSource?.videoUrl}")
+
                         if (ashdiSource != null) {
                             epPoster = getAshdiPoster(ashdiSource.videoUrl!!)
+                            Log.e(TAG, "Episode $epNum: getAshdiPoster result=$epPoster")
                         }
                     }
 
@@ -557,11 +616,16 @@ private suspend fun getMoonPoster(iframeUrl: String): String? {
                         epPoster = sources.firstNotNullOfOrNull { s ->
                             s.apiPoster?.takeIf { !it.contains("mooncdn.") }
                         }
+
+                        Log.e(TAG, "Episode $epNum: fallback apiPoster candidate=$epPoster")
                     }
 
                     if (epPoster != null && epPoster.contains("mooncdn.")) {
+                        Log.e(TAG, "Episode $epNum: rejecting mooncdn poster: $epPoster")
                         epPoster = null
                     }
+
+                    Log.e(TAG, "Episode $epNum: final epPoster=$epPoster")
 
                     val dataJson = org.json.JSONArray().also { arr ->
                         sources.forEach { s ->
