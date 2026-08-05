@@ -290,6 +290,28 @@ class AnimeONProvider : MainAPI() {
         moonCookies = cookies
         return cookies
     }
+
+    private fun buildMoonPosterHeaders(cookies: Map<String, String>): Map<String, String> {
+        val headers = mutableMapOf(
+            "User-Agent" to userAgent,
+            "Referer" to "https://moonanime.art/",
+            "Origin" to "https://moonanime.art",
+            "Accept" to "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+            "Accept-Language" to "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Sec-Fetch-Site" to "same-site",
+            "Sec-Fetch-Mode" to "no-cors",
+            "Sec-Fetch-Dest" to "image",
+            "X-Requested-With" to "mark.via.gp"
+        )
+
+        val cookieHeader = cookies.entries.joinToString("; ") { "${it.key}=${it.value}" }
+
+        if (cookieHeader.isNotBlank()) {
+            headers["Cookie"] = cookieHeader
+        }
+
+        return headers
+    }
     
     private suspend fun getMoonPoster(iframeUrl: String): String? {
         Log.e(TAG, "getMoonPoster input: $iframeUrl")
@@ -698,19 +720,28 @@ if (epNum == 1 && epPoster != null) {
         Log.e(TAG, "TEST fetch failed", e)
     }
 }
+                    val posterHeaders = if (epPoster != null && epPoster.contains("s.moonanime.art")) {
+                        try {
+                            buildMoonPosterHeaders(getMoonCookies())
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Failed to build moon poster headers", e)
+                            null
+                        }
+                    } else {
+                        null
+                    }
+
                     episodes.add(
                         newEpisode(dataJson).apply {
                             this.name = episodeName
                             this.episode = epNum
                             this.posterUrl = epPoster
+
+                            if (posterHeaders != null) {
+                                this.posterHeaders = posterHeaders
+                            }
                         }
                     )
-                }
-
-            } catch (e: Exception) {
-            }
-        }
-
         val franchise = buildFranchise(animeId)
 
         return if (tvType == TvType.Anime || tvType == TvType.OVA) {
