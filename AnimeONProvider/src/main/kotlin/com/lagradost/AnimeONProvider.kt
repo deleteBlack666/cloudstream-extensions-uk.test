@@ -641,20 +641,45 @@ class AnimeONProvider : MainAPI() {
                     val episodeName = episodeInfoMap[epNum]?.takeIf { it.isNotBlank() }
 if (epNum == 1 && epPoster != null) {
     try {
-        val testBytes = app.get(
+        val cookies = getMoonCookies()
+
+        val resp = app.get(
             epPoster,
             headers = mapOf(
                 "User-Agent" to userAgent,
                 "Referer" to "https://moonanime.art/",
                 "Origin" to "https://moonanime.art",
-                "Accept" to "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
+                "Accept" to "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+                "Accept-Language" to "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
+                "Sec-Fetch-Site" to "same-site",
+                "Sec-Fetch-Mode" to "no-cors",
+                "Sec-Fetch-Dest" to "image",
             ),
+            cookies = cookies,
             cacheTime = 0
-        ).body.bytes()
+        )
 
-        Log.e(TAG, "TEST direct poster fetch OK, size=${testBytes.size}")
+        val bytes = resp.body.bytes()
+
+        val bodyText = try {
+            String(bytes, Charsets.UTF_8).take(200)
+        } catch (e: Exception) {
+            ""
+        }
+
+        val firstBytesHex = bytes.take(32).joinToString(" ") {
+            String.format("%02x", it)
+        }
+
+        Log.e(TAG, "TEST fetch URL: $epPoster")
+        Log.e(TAG, "TEST fetch response: $resp")
+        Log.e(TAG, "TEST fetch size: ${bytes.size}")
+        Log.e(TAG, "TEST fetch Content-Type: ${resp.headers["Content-Type"] ?: resp.headers["content-type"]}")
+        Log.e(TAG, "TEST fetch Location: ${resp.headers["Location"] ?: resp.headers["location"]}")
+        Log.e(TAG, "TEST fetch bodyText: $bodyText")
+        Log.e(TAG, "TEST fetch firstBytes: $firstBytesHex")
     } catch (e: Exception) {
-        Log.e(TAG, "TEST direct poster fetch failed", e)
+        Log.e(TAG, "TEST fetch failed", e)
     }
 }
                     episodes.add(
