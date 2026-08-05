@@ -426,7 +426,7 @@ class AnimeONProvider : MainAPI() {
                 headers = mapOf(
                     "User-Agent"     to userAgent,
                     "Accept"         to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                    "Accept-Language"to "uk-UA,uk;q=0.9",
+                    "Accept-Language" to "uk-UA,uk;q=0.9",
                 ),
                 cacheTime = 0
             )
