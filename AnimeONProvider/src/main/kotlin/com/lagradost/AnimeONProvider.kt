@@ -639,7 +639,24 @@ class AnimeONProvider : MainAPI() {
                     }.toString()
 
                     val episodeName = episodeInfoMap[epNum]?.takeIf { it.isNotBlank() }
+if (epNum == 1 && epPoster != null) {
+    try {
+        val testBytes = app.get(
+            epPoster,
+            headers = mapOf(
+                "User-Agent" to userAgent,
+                "Referer" to "https://moonanime.art/",
+                "Origin" to "https://moonanime.art",
+                "Accept" to "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
+            ),
+            cacheTime = 0
+        ).body.bytes()
 
+        Log.e(TAG, "TEST direct poster fetch OK, size=${testBytes.size}")
+    } catch (e: Exception) {
+        Log.e(TAG, "TEST direct poster fetch failed", e)
+    }
+}
                     episodes.add(
                         newEpisode(dataJson).apply {
                             this.name = episodeName
