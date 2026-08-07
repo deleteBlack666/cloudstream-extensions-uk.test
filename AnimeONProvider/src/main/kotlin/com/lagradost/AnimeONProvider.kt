@@ -217,11 +217,8 @@ class AnimeONProvider : MainAPI() {
                     Thread {
                         try {
                             val line = client.getInputStream().bufferedReader().readLine() ?: return@Thread
-
-                            // Приклад: GET /poster?ключ HTTP/1.1
                             val key = line.substringAfter("?").substringBefore(" ").trim()
                             val originalUrl = posterSources[key]
-
                             val out = client.getOutputStream()
 
                             if (originalUrl.isNullOrEmpty()) {
@@ -293,9 +290,7 @@ class AnimeONProvider : MainAPI() {
                 .build()
 
             val response = posterHttpClient.newCall(request).execute()
-
             val setCookies = response.headers.toMultimap()["set-cookie"] ?: emptyList()
-
             response.close()
 
             val cookiePairs = setCookies.mapNotNull { cookie ->
@@ -342,7 +337,6 @@ class AnimeONProvider : MainAPI() {
             }
 
             val bytes = response.body?.bytes() ?: ByteArray(0)
-
             response.close()
 
             bytes
@@ -1281,7 +1275,7 @@ class AnimeONProvider : MainAPI() {
         val moonVideoHeaders = mapOf(
             "User-Agent" to userAgent,
             "Accept" to "*/*",
-            "Accept-Language" to "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Accept-Language" to "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.8,en;q=0.7",
             "Referer" to "https://moonanime.art/",
             "Origin" to "https://moonanime.art",
             "Sec-Ch-Ua-Platform" to "\"Android\"",
