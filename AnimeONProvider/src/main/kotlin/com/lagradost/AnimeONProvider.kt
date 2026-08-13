@@ -456,44 +456,83 @@ class AnimeONProvider : MainAPI() {
         }
     }
 
-    private suspend fun getAshdiPoster(videoUrl: String?): String? {
-        if (videoUrl.isNullOrEmpty()) return null
-        if (!videoUrl.contains("ashdi.vip")) return null
+    private suspend fun getAshdiPoster(videoUrl: String?, animePoster: String?): String? {
+    if (videoUrl.isNullOrEmpty()) return animePoster
+    if (!videoUrl.contains("ashdi.vip")) return animePoster
 
-        val url = if (videoUrl.contains("?")) {
-            videoUrl
-        } else {
-            "$videoUrl?player=animeon.club"
+    val url = if (videoUrl.contains("?")) {
+        videoUrl
+    } else {
+        "$videoUrl?player=animeon.club"
+    }
+
+    // Спробуємо отримати HTML сторінки ashdi
+    val html = try {
+        app.get(
+            url,
+            headers = mapOf(
+                "User-Agent" to userAgent,
+                "Referer" to "$mainUrl/",
+                "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                "Accept-Language" to "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7"
+            ),
+            cacheTime = 0
+        ).text
+    } catch (e: Exception) {
+        ""
+    }
+
+    // Якщо отримали HTML, шукаємо постер
+    if (html.isNotEmpty() && !html.contains("недоступний")) {
+        val posterRegex = Regex("""poster:\s*["']((?:https?:)?//[^"']+)["']""")
+        val raw = posterRegex.find(html)?.groupValues?.get(1)
+
+        if (!raw.isNullOrEmpty()) {
+            return if (raw.startsWith("http")) raw else "https:$raw"
         }
 
-        return try {
-            val html = app.get(
-                url,
-                headers = mapOf(
-                    "User-Agent" to userAgent,
-                    "Referer" to "$mainUrl/"
-                ),
-                cacheTime = 0
-            ).text
+        val screenRegex = Regex("""((?:https?:)?//[^"'\s]+screen\.jpg)""")
+        val screenMatch = screenRegex.find(html)?.groupValues?.get(1)
 
-            val posterRegex = Regex("""poster:\s*["']((?:https?:)?//[^"']+)["']""")
-            val raw = posterRegex.find(html)?.groupValues?.get(1)
-
-            if (!raw.isNullOrEmpty()) {
-                return if (raw.startsWith("http")) raw else "https:$raw"
-            }
-
-            val screenRegex = Regex("""((?:https?:)?//[^"'\s]+screen\.jpg)""")
-            val screenMatch = screenRegex.find(html)?.groupValues?.get(1)
-
-            if (screenMatch != null) {
-                if (screenMatch.startsWith("http")) screenMatch else "https:$screenMatch"
-            } else {
-                null
-            }
-        } catch (e: Exception) {
-            null
+        if (screenMatch != null) {
+            return if (screenMatch.startsWith("http")) screenMatch else "https:$screenMatch"
         }
+    }
+
+    // Спробуємо згенерувати URL постера на основі videoUrl
+    // Ashdi зазвичай має pattern: /content/stream/.../screen.jpg
+    val vodMatch = Regex("""/vod/(\d+)""").find(videoUrl)?.groupValues?.get(1)
+    
+    if (!vodMatch.isNullOrEmpty()) {
+        // Спробуємо різні варіанти URL постера
+        val possiblePosterUrls = listOf(
+            "https://ashdi.vip/content/stream/serials/screen_$vodMatch.jpg",
+            "https://ashdi.vip/content/stream/screen_$vodMatch.jpg",
+        )
+        
+        for (posterUrl in possiblePosterUrls) {
+            try {
+                val checkResponse = app.get(
+                    posterUrl,
+                    headers = mapOf(
+                        "User-Agent" to userAgent,
+                        "Referer" to "https://ashdi.vip/"
+                    ),
+                    cacheTime = 0
+                )
+                
+                if (checkResponse.isSuccessful) {
+                    return posterUrl
+                }
+            } catch (e: Exception) {
+                continue
+            }
+        }
+    }
+
+    // Fallback на основний постер аніме
+    return animePoster
+    }
     }
 
     private suspend fun getMoonPoster(iframeUrl: String): String? {
