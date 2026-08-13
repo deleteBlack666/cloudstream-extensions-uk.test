@@ -317,37 +317,54 @@ class AnimeONProvider : MainAPI() {
     }
 
     private fun fetchPosterBytes(originalUrl: String): ByteArray {
-        return try {
-            val requestBuilder = okhttp3.Request.Builder()
-                .url(originalUrl)
-                .header("User-Agent", userAgent)
-                .header("Referer", "https://moonanime.art/")
-                .header("Origin", "https://moonanime.art")
-                .header("Accept", "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8")
-                .header("Accept-Language", "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7")
-                .header("Sec-Fetch-Site", "same-site")
-                .header("Sec-Fetch-Mode", "no-cors")
-                .header("Sec-Fetch-Dest", "image")
-                .get()
-
-            getMoonCookieHeader()?.let { cookie ->
-                requestBuilder.header("Cookie", cookie)
+    return try {
+        val requestBuilder = okhttp3.Request.Builder()
+            .url(originalUrl)
+            .header("User-Agent", userAgent)
+            .header("Accept", "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8")
+            .header("Accept-Language", "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7")
+            .header("Accept-Encoding", "gzip, deflate, br")
+            .header("Sec-Fetch-Dest", "image")
+            .header("Sec-Fetch-Mode", "no-cors")
+            .header("Sec-Fetch-Site", "cross-site")
+            .get()
+            
+        when {
+            originalUrl.contains("s.moonanime.art") -> {
+                requestBuilder.header("Referer", "https://moonanime.art/")
+                requestBuilder.header("Origin", "https://moonanime.art")
             }
-
-            val response = posterHttpClient.newCall(requestBuilder.build()).execute()
-
-            if (!response.isSuccessful) {
-                response.close()
-                return ByteArray(0)
+            originalUrl.contains("moonanime.art") -> {
+                requestBuilder.header("Referer", "https://moonanime.art/")
+                requestBuilder.header("Origin", "https://moonanime.art")
             }
-
-            val bytes = response.body?.bytes() ?: ByteArray(0)
-            response.close()
-
-            bytes
-        } catch (e: Exception) {
-            ByteArray(0)
+            originalUrl.contains("mooncdn.") -> {
+                requestBuilder.header("Referer", "https://moonanime.art/")
+                requestBuilder.header("Origin", "https://moonanime.art")
+            }
         }
+
+        getMoonCookieHeader()?.let { cookie ->
+            requestBuilder.header("Cookie", cookie)
+        }
+
+        val response = posterHttpClient.newCall(requestBuilder.build()).execute()
+
+        if (!response.isSuccessful) {
+            println("Failed to fetch poster: ${response.code} - ${response.message}")
+            response.close()
+            return ByteArray(0)
+        }
+
+        val bytes = response.body?.bytes() ?: ByteArray(0)
+        response.close()
+
+        println("Successfully fetched poster: ${bytes.size} bytes")
+        bytes
+    } catch (e: Exception) {
+        println("Error fetching poster: ${e.message}")
+        ByteArray(0)
+    }
     }
 
     private suspend fun buildFranchise(animeId: Int): List<SearchResponse> {
@@ -474,78 +491,7 @@ class AnimeONProvider : MainAPI() {
         }
     }
 
-    private suspend fun getMoonPoster(iframeUrl: String): String? {
-        if (!iframeUrl.contains("/iframe/")) return null
-
-        val cleanUrl = if (iframeUrl.contains("player=")) {
-            iframeUrl
-        } else {
-            "$iframeUrl${if (iframeUrl.contains("?")) "&" else "?"}player=animeon.club"
-        }
-
-        return try {
-            val html = app.get(
-                cleanUrl,
-                headers = mapOf(
-                    "User-Agent" to userAgent,
-                    "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                    "Accept-Language" to "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
-                    "Referer" to "https://animeon.club/",
-                    "X-Requested-With" to "mark.via.gp",
-                    "Sec-Fetch-Site" to "none",
-                    "Sec-Fetch-Mode" to "navigate",
-                    "Sec-Fetch-User" to "?1",
-                    "Sec-Fetch-Dest" to "document",
-                    "Upgrade-Insecure-Requests" to "1"
-                ),
-                cacheTime = 0
-            ).text
-
-            if (html.isEmpty()) {
-                null
-            } else {
-                val atobRegex = Regex("""atob\s*\(\s*["']([^"']+)["']\s*\)""")
-                var posterUrl: String? = null
-
-                for (match in atobRegex.findAll(html)) {
-                    val decoded = moonOuterDecode(match.groupValues[1])
-
-                    if (!decoded.contains("poster")) continue
-
-                    posterUrl = Regex("""poster\s*:\s*["'](https?://[^"']+)["']""")
-                        .find(decoded)?.groupValues?.get(1)
-
-                    if (posterUrl != null) break
-
-                    val xorKey = Regex("""var\s+k\s*=\s*["']([^"']+)["']""")
-                        .find(decoded)?.groupValues?.get(1) ?: continue
-
-                    val posterEnc = Regex("""poster\s*:\s*_0xd\s*\(\s*["']([^"']+)["']\s*\)""")
-                        .find(decoded)?.groupValues?.get(1) ?: continue
-
-                    val result = moonDecrypt(posterEnc, xorKey)
-
-                    if (result.startsWith("http")) {
-                        posterUrl = result
-                        break
-                    }
-                }
-
-                if (posterUrl == null) {
-                    null
-                } else {
-                    ensurePosterProxy()
-
-                    val key = java.util.UUID.randomUUID().toString().replace("-", "")
-                    posterSources[key] = posterUrl
-
-                    "http://127.0.0.1:$posterProxyPort/poster?$key"
-                }
-            }
-        } catch (e: Exception) {
-            null
-        }
-    }
+    
 
     private suspend fun resolveMoonContent(contentUrl: String): String? {
         return try {
