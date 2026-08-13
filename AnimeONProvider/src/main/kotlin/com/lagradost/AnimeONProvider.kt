@@ -53,7 +53,6 @@ class AnimeONProvider : MainAPI() {
     private val posterSources = java.util.concurrent.ConcurrentHashMap<String, String>()
     private var moonCookieHeader: String? = null
 
-    // ВИПРАВЛЕНО: Прибрано автоматичне gzip декодування
     private val posterHttpClient = okhttp3.OkHttpClient.Builder()
         .connectTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
         .readTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
@@ -231,7 +230,6 @@ class AnimeONProvider : MainAPI() {
                             val reader = input.bufferedReader()
                             val line = reader.readLine() ?: return@Thread
                             
-                            // Парсимо HTTP запит
                             val key = line.substringAfter("?").substringBefore(" ").trim()
                             val originalUrl = posterSources[key]
                             val out = client.getOutputStream()
@@ -266,7 +264,6 @@ class AnimeONProvider : MainAPI() {
                                     else -> "application/octet-stream"
                                 }
 
-                                // ВИПРАВЛЕНО: Правильні HTTP заголовки
                                 val response = buildString {
                                     append("HTTP/1.1 200 OK\r\n")
                                     append("Content-Type: $contentType\r\n")
@@ -332,57 +329,55 @@ class AnimeONProvider : MainAPI() {
     }
 
     private fun fetchPosterBytes(originalUrl: String): ByteArray {
-    return try {
-        val requestBuilder = okhttp3.Request.Builder()
-            .url(originalUrl)
-            .header("User-Agent", userAgent)
-            .header("Accept", "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8")
-            .header("Accept-Language", "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7")
-            .header("Sec-Fetch-Dest", "image")
-            .header("Sec-Fetch-Mode", "no-cors")
-            .header("Sec-Fetch-Site", "cross-site")
-            .get()
+        return try {
+            val requestBuilder = okhttp3.Request.Builder()
+                .url(originalUrl)
+                .header("User-Agent", userAgent)
+                .header("Accept", "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8")
+                .header("Accept-Language", "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7")
+                .header("Sec-Fetch-Dest", "image")
+                .header("Sec-Fetch-Mode", "no-cors")
+                .header("Sec-Fetch-Site", "cross-site")
+                .get()
 
-        when {
-            originalUrl.contains("s.moonanime.art") || 
-            originalUrl.contains("moonanime.art") || 
-            originalUrl.contains("mooncdn.") -> {
-                requestBuilder.header("Referer", "https://moonanime.art/")
-                requestBuilder.header("Origin", "https://moonanime.art")
+            when {
+                originalUrl.contains("s.moonanime.art") || 
+                originalUrl.contains("moonanime.art") || 
+                originalUrl.contains("mooncdn.") -> {
+                    requestBuilder.header("Referer", "https://moonanime.art/")
+                    requestBuilder.header("Origin", "https://moonanime.art")
+                }
+                originalUrl.contains("ashdi.vip") -> {
+                    requestBuilder.header("Referer", "https://ashdi.vip/")
+                    requestBuilder.header("Origin", "https://ashdi.vip")
+                    requestBuilder.header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
+                    requestBuilder.header("Sec-Fetch-Dest", "document")
+                    requestBuilder.header("Sec-Fetch-Mode", "navigate")
+                    requestBuilder.header("Sec-Fetch-Site", "none")
+                    requestBuilder.header("Cookie", "_ga=GA1.1.1899212404.1785951203; _gid=GA1.2.1071268545.1786650637")
+                }
             }
-            originalUrl.contains("ashdi.vip") -> {
-                requestBuilder.header("Referer", "https://ashdi.vip/")
-                requestBuilder.header("Origin", "https://ashdi.vip")
-                requestBuilder.header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
-                requestBuilder.header("Sec-Fetch-Dest", "document")
-                requestBuilder.header("Sec-Fetch-Mode", "navigate")
-                requestBuilder.header("Sec-Fetch-Site", "none")
-                
-                // Додаємо базові cookies для ashdi
-                requestBuilder.header("Cookie", "_ga=GA1.1.1899212404.1785951203; _gid=GA1.2.1071268545.1786650637")
+
+            getMoonCookieHeader()?.let { cookie ->
+                if (originalUrl.contains("moon")) {
+                    requestBuilder.header("Cookie", cookie)
+                }
             }
-        }
 
-        getMoonCookieHeader()?.let { cookie ->
-            if (originalUrl.contains("moon")) {
-                requestBuilder.header("Cookie", cookie)
+            val response = posterHttpClient.newCall(requestBuilder.build()).execute()
+
+            if (!response.isSuccessful) {
+                response.close()
+                return ByteArray(0)
             }
-        }
 
-        val response = posterHttpClient.newCall(requestBuilder.build()).execute()
-
-        if (!response.isSuccessful) {
+            val bytes = response.body?.bytes() ?: ByteArray(0)
             response.close()
-            return ByteArray(0)
+
+            bytes
+        } catch (e: Exception) {
+            ByteArray(0)
         }
-
-        val bytes = response.body?.bytes() ?: ByteArray(0)
-        response.close()
-
-        bytes
-    } catch (e: Exception) {
-        ByteArray(0)
-    }
     }
 
     private suspend fun buildFranchise(animeId: Int): List<SearchResponse> {
@@ -470,72 +465,53 @@ class AnimeONProvider : MainAPI() {
     }
 
     private suspend fun getAshdiPoster(videoUrl: String?): String? {
-    if (videoUrl.isNullOrEmpty()) return null
-    if (!videoUrl.contains("ashdi.vip")) return null
+        if (videoUrl.isNullOrEmpty()) return null
+        if (!videoUrl.contains("ashdi.vip")) return null
 
-    val url = if (videoUrl.contains("?")) {
-        videoUrl
-    } else {
-        "$videoUrl?player=animeon.club"
-    }
+        val url = if (videoUrl.contains("?")) {
+            videoUrl
+        } else {
+            "$videoUrl?player=animeon.club"
+        }
 
-    val html = try {
-        app.get(
-            url,
-            headers = mapOf(
-                "User-Agent" to userAgent,
-                "Referer" to "$mainUrl/",
-                "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-                "Accept-Language" to "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
-                "Cookie" to "_ga=GA1.1.1899212404.1785951203; _gid=GA1.2.1071268545.1786650637",
-                "Sec-Fetch-Dest" to "document",
-                "Sec-Fetch-Mode" to "navigate",
-                "Sec-Fetch-Site" to "none"
-            ),
-            cacheTime = 0
-        ).text
-    } catch (e: Exception) {
-        ""
-    }
+        val html = try {
+            app.get(
+                url,
+                headers = mapOf(
+                    "User-Agent" to userAgent,
+                    "Referer" to "$mainUrl/",
+                    "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                    "Accept-Language" to "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
+                    "Cookie" to "_ga=GA1.1.1899212404.1785951203; _gid=GA1.2.1071268545.1786650637",
+                    "Sec-Fetch-Dest" to "document",
+                    "Sec-Fetch-Mode" to "navigate",
+                    "Sec-Fetch-Site" to "none"
+                ),
+                cacheTime = 0
+            ).text
+        } catch (e: Exception) {
+            ""
+        }
 
-    // Шукаємо постер у HTML
-    if (html.isNotEmpty() && !html.contains("недоступний")) {
-        val posterPatterns = listOf(
-            Regex("""poster:\s*["']((?:https?:)?//[^"']+)["']"""),
-            Regex("""((?:https?:)?//[^"'\s]+screen\.jpg)"""),
-            Regex("""((?:https?:)?//[^"'\s]+\.ashdi\.vip[^"'\s]*(?:screen|poster)[^"'\s]*)"""),
-            Regex("""((?:https?:)?//[^"'\s]+ashdi\.vip/content/[^"'\s]+\.(jpg|jpeg|png|webp))"""),
-        )
+        if (html.isNotEmpty() && !html.contains("недоступний")) {
+            val posterPatterns = listOf(
+                Regex("""poster\s*:\s*["']([^"']+)["']"""),
+                Regex("""((?:https?:)?//[^"'\s]+screen\.jpg)"""),
+                Regex("""((?:https?:)?//[^"'\s]+\.ashdi\.vip[^"'\s]*(?:screen|poster)[^"'\s]*)"""),
+                Regex("""((?:https?:)?//[^"'\s]+ashdi\.vip/content/[^"'\s]+\.(?:jpg|jpeg|png|webp))""")
+            )
 
-        for (pattern in posterPatterns) {
-            val match = pattern.find(html)
-            if (match != null) {
-                val posterUrl = match.groupValues[1]
-                val result = if (posterUrl.startsWith("http")) posterUrl else "https:$posterUrl"
-                
-                // Перевіряємо, чи URL дійсно доступний
-                try {
-                    val checkResponse = app.get(
-                        result,
-                        headers = mapOf(
-                            "User-Agent" to userAgent,
-                            "Referer" to "https://ashdi.vip/",
-                            "Cookie" to "_ga=GA1.1.1899212404.1785951203; _gid=GA1.2.1071268545.1786650637"
-                        ),
-                        cacheTime = 0
-                    )
-                    
-                    if (checkResponse.isSuccessful) {
-                        return result
-                    }
-                } catch (e: Exception) {
-                    continue
+            for (pattern in posterPatterns) {
+                val match = pattern.find(html)
+                if (match != null) {
+                    val posterUrl = match.groupValues[1]
+                    val result = if (posterUrl.startsWith("http")) posterUrl else "https:$posterUrl"
+                    return result
                 }
             }
         }
-    }
 
-    return null
+        return null
     }
 
     private suspend fun getMoonPoster(iframeUrl: String): String? {
@@ -867,23 +843,22 @@ class AnimeONProvider : MainAPI() {
 
                     var epPoster: String? = null
 
-                    // ВИПРАВЛЕНО: Використовуємо постер з API напряму
                     epPoster = sources.firstNotNullOfOrNull { s ->
                         s.apiPoster?.takeIf { 
                             it.isNotEmpty() && !it.contains("mooncdn.") 
                         }
                     }
 
-                    // Якщо постер з API не знайдено, спробуємо отримати через iframe
                     if (epPoster.isNullOrEmpty()) {
-                        val moonSource = sources.firstOrNull {
-                            s -> !s.apiPoster.isNullOrEmpty()
-                        }
-                        
-                        if (moonSource != null) {
-                            val videoUrl = getEpisodeVideoUrl(moonSource.episodeId)
-                            if (!videoUrl.isNullOrEmpty() && videoUrl.contains("moonanime.art")) {
-                                epPoster = getMoonPoster(videoUrl)
+                        val firstSource = sources.firstOrNull()
+                        if (firstSource != null) {
+                            val videoUrl = getEpisodeVideoUrl(firstSource.episodeId)
+                            if (!videoUrl.isNullOrEmpty()) {
+                                if (videoUrl.contains("moonanime.art")) {
+                                    epPoster = getMoonPoster(videoUrl)
+                                } else if (videoUrl.contains("ashdi.vip")) {
+                                    epPoster = getAshdiPoster(videoUrl)
+                                }
                             }
                         }
                     }
