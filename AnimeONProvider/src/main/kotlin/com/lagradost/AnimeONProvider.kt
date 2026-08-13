@@ -80,7 +80,7 @@ class AnimeONProvider : MainAPI() {
 
     override val mainPage = mainPageOf(
         "$apiUrl/seasons" to currentSeasonLabel(),
-        "$mainUrl/api/popular" to "Популярні аніме",
+        "$mainUrl/api/anime/popular" to "Популярні аніме",
         "$apiUrl?pageSize=24&pageIndex=%d" to "Нове аніме на сайті",
     )
 
