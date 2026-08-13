@@ -491,7 +491,81 @@ class AnimeONProvider : MainAPI() {
         }
     }
 
-    
+    private suspend fun getMoonPoster(iframeUrl: String): String? {
+    if (!iframeUrl.contains("/iframe/")) return null
+
+    val cleanUrl = if (iframeUrl.contains("player=")) {
+        iframeUrl
+    } else {
+        "$iframeUrl${if (iframeUrl.contains("?")) "&" else "?"}player=animeon.club"
+    }
+
+    return try {
+        val html = app.get(
+            cleanUrl,
+            headers = mapOf(
+                "User-Agent" to userAgent,
+                "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language" to "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
+                "Referer" to "https://animeon.club/",
+                "X-Requested-With" to "mark.via.gp",
+                "Sec-Fetch-Site" to "none",
+                "Sec-Fetch-Mode" to "navigate",
+                "Sec-Fetch-User" to "?1",
+                "Sec-Fetch-Dest" to "document",
+                "Upgrade-Insecure-Requests" to "1"
+            ),
+            cacheTime = 0
+        ).text
+
+        if (html.isEmpty()) {
+            null
+        } else {
+            val atobRegex = Regex("""atob\s*\(\s*["']([^"']+)["']\s*\)""")
+            var posterUrl: String? = null
+
+            for (match in atobRegex.findAll(html)) {
+                val decoded = moonOuterDecode(match.groupValues[1])
+
+                if (!decoded.contains("poster")) continue
+
+                // Шукаємо poster URL (може містити параметри expires та sig)
+                posterUrl = Regex("""poster\s*:\s*["'](https?://[^"']+)["']""")
+                    .find(decoded)?.groupValues?.get(1)
+
+                if (posterUrl != null) break
+
+                val xorKey = Regex("""var\s+k\s*=\s*["']([^"']+)["']""")
+                    .find(decoded)?.groupValues?.get(1) ?: continue
+
+                val posterEnc = Regex("""poster\s*:\s*_0xd\s*\(\s*["']([^"']+)["']\s*\)""")
+                    .find(decoded)?.groupValues?.get(1) ?: continue
+
+                val result = moonDecrypt(posterEnc, xorKey)
+
+                if (result.startsWith("http")) {
+                    posterUrl = result
+                    break
+                }
+            }
+
+            if (posterUrl == null) {
+                null
+            } else {
+                ensurePosterProxy()
+
+                val key = java.util.UUID.randomUUID().toString().replace("-", "")
+                posterSources[key] = posterUrl
+
+                println("Poster URL found: $posterUrl")
+                "http://127.0.0.1:$posterProxyPort/poster?$key"
+            }
+        }
+    } catch (e: Exception) {
+        println("Error getting moon poster: ${e.message}")
+        null
+    }
+    }
 
     private suspend fun resolveMoonContent(contentUrl: String): String? {
         return try {
