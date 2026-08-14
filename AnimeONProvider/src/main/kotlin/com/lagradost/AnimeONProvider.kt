@@ -814,47 +814,35 @@ class AnimeONProvider : MainAPI() {
                         val seenIDs = mutableSetOf<Int>()
 
                         val baseUrl =
-                            "$mainUrl/api/player/$animeId/episodes?take=100&playerId=${player.id}&translationId=$translationId&includeAlternative=true"
-
-                        val epJsonMinus1 = fetchJsonOrNull("$baseUrl&skip=-1")
-
-                        if (epJsonMinus1 != null) {
-                            val eps = try {
-                                AppUtils.parseJson<SafePlayerEpisodes>(epJsonMinus1).episodes
-                            } catch (e: Exception) {
-                                null
-                            }
-
-                            eps?.filter { it.episode <= 0 && seenIDs.add(it.id) }?.let {
-                                collected.addAll(it)
-                            }
-                        }
+                            "$mainUrl/api/player/$animeId/episodes?take=100&playerId=${player.id}&translationId=$translationId"
 
                         val maxSkip = if (player.episodesCount > 0) {
-                            (player.episodesCount / 100 + 1) * 100
+                            (player.episodesCount / 100 + 2) * 100
                         } else {
                             11000
                         }
 
-                        var skip = 0
+                        for (includeAlt in listOf("true", "false")) {
+                            var skip = -1
 
-                        while (skip <= maxSkip) {
-                            val epJson = fetchJsonOrNull("$baseUrl&skip=$skip") ?: break
+                            while (skip <= maxSkip) {
+                                val epJson = fetchJsonOrNull("$baseUrl&skip=$skip&includeAlternative=$includeAlt") ?: break
 
-                            val eps = try {
-                                AppUtils.parseJson<SafePlayerEpisodes>(epJson).episodes
-                            } catch (e: Exception) {
-                                null
+                                val eps = try {
+                                    AppUtils.parseJson<SafePlayerEpisodes>(epJson).episodes
+                                } catch (e: Exception) {
+                                    null
+                                }
+
+                                if (eps.isNullOrEmpty()) break
+
+                                val newEps = eps.filter { seenIDs.add(it.id) }
+                                collected.addAll(newEps)
+
+                                if (eps.size < 100) break
+
+                                skip += 100
                             }
-
-                            if (eps.isNullOrEmpty()) break
-
-                            val newEps = eps.filter { seenIDs.add(it.id) }
-                            collected.addAll(newEps)
-
-                            if (eps.size < 100) break
-
-                            skip += 100
                         }
 
                         for (ep in collected) {
@@ -1105,47 +1093,35 @@ class AnimeONProvider : MainAPI() {
                     val seenIDs = mutableSetOf<Int>()
 
                     val baseUrl =
-                        "$mainUrl/api/player/$animeId/episodes?take=100&playerId=${player.id}&translationId=$translationId&includeAlternative=true"
-
-                    val epJsonMinus1 = fetchJsonWithRetry("$baseUrl&skip=-1")
-
-                    if (epJsonMinus1 != null) {
-                        val eps = try {
-                            AppUtils.parseJson<SafePlayerEpisodes>(epJsonMinus1).episodes
-                        } catch (e: Exception) {
-                            null
-                        }
-
-                        eps?.filter { it.episode <= 0 && seenIDs.add(it.id) }?.let {
-                            collected.addAll(it)
-                        }
-                    }
+                        "$mainUrl/api/player/$animeId/episodes?take=100&playerId=${player.id}&translationId=$translationId"
 
                     val maxSkip = if (player.episodesCount > 0) {
-                        (player.episodesCount / 100 + 1) * 100
+                        (player.episodesCount / 100 + 2) * 100
                     } else {
                         11000
                     }
 
-                    var skip = 0
+                    for (includeAlt in listOf("true", "false")) {
+                        var skip = -1
 
-                    while (skip <= maxSkip) {
-                        val epJson = fetchJsonWithRetry("$baseUrl&skip=$skip") ?: break
+                        while (skip <= maxSkip) {
+                            val epJson = fetchJsonWithRetry("$baseUrl&skip=$skip&includeAlternative=$includeAlt") ?: break
 
-                        val eps = try {
-                            AppUtils.parseJson<SafePlayerEpisodes>(epJson).episodes
-                        } catch (e: Exception) {
-                            null
+                            val eps = try {
+                                AppUtils.parseJson<SafePlayerEpisodes>(epJson).episodes
+                            } catch (e: Exception) {
+                                null
+                            }
+
+                            if (eps.isNullOrEmpty()) break
+
+                            val newEps = eps.filter { seenIDs.add(it.id) }
+                            collected.addAll(newEps)
+
+                            if (eps.size < 100) break
+
+                            skip += 100
                         }
-
-                        if (eps.isNullOrEmpty()) break
-
-                        val newEps = eps.filter { seenIDs.add(it.id) }
-                        collected.addAll(newEps)
-
-                        if (eps.size < 100) break
-
-                        skip += 100
                     }
 
                     val sourceName = "${translation.translation.name} (${player.name})"
