@@ -51,11 +51,6 @@ class AnimeONProvider : MainAPI() {
     private val posterCache = java.util.concurrent.ConcurrentHashMap<String, ByteArray>()
     private val posterSources = java.util.concurrent.ConcurrentHashMap<String, String>()
     private var moonCookieHeader: String? = null
-    private val ashdiPosterCache = java.util.concurrent.ConcurrentHashMap<String, String>()
-    private var lastAshdiRequestTime = 0L
-    private val ashdiRequestDelay = 150L
-    private var ashdiErrorCount = 0
-    private var ashdiCooldownUntil = 0L
 
     private val posterHttpClient = okhttp3.OkHttpClient.Builder()
         .connectTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
@@ -486,87 +481,56 @@ class AnimeONProvider : MainAPI() {
     }
 
 
-private suspend fun getAshdiPoster(videoUrl: String?): String? {
-        if (videoUrl.isNullOrEmpty()) return null
-        if (!videoUrl.contains("ashdi.vip")) return null
-
+private fun fetchAshdiPosterSync(videoUrl: String): String? {
         if (ashdiPosterCache.containsKey(videoUrl)) {
             val cached = ashdiPosterCache[videoUrl]
             return if (cached.isNullOrEmpty()) null else cached
         }
 
-        val currentTime = System.currentTimeMillis()
-        if (currentTime < ashdiCooldownUntil) {
-            return null
-        }
+        val url = if (videoUrl.contains("?")) videoUrl else "$videoUrl?player=animeon.club"
 
-        if (lastAshdiRequestTime > 0) {
-            val timeSinceLastRequest = currentTime - lastAshdiRequestTime
-            if (timeSinceLastRequest < ashdiRequestDelay) {
-                try {
-                    Thread.sleep(ashdiRequestDelay - timeSinceLastRequest)
-                } catch (e: InterruptedException) {
-                    Thread.currentThread().interrupt()
-                    return null
-                }
-            }
-        }
-        lastAshdiRequestTime = System.currentTimeMillis()
+        val html = httpGetText(
+            url,
+            mapOf(
+                "User-Agent" to userAgent,
+                "Referer" to "$mainUrl/",
+                "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                "Accept-Language" to "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
+                "Sec-Fetch-Dest" to "document",
+                "Sec-Fetch-Mode" to "navigate",
+                "Sec-Fetch-Site" to "none"
+            ),
+            mapOf(
+                "_ga" to "GA1.1.1899212404.1785951203",
+                "_gid" to "GA1.2.1071268545.1786650637"
+            )
+        )
 
-        val url = if (videoUrl.contains("?")) {
-            videoUrl
-        } else {
-            "$videoUrl?player=animeon.club"
-        }
-
-        val html = try {
-            app.get(
-                url,
-                headers = mapOf(
-                    "User-Agent" to userAgent,
-                    "Referer" to "$mainUrl/",
-                    "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-                    "Accept-Language" to "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
-                    "Sec-Fetch-Dest" to "document",
-                    "Sec-Fetch-Mode" to "navigate",
-                    "Sec-Fetch-Site" to "none"
-                ),
-                cookies = mapOf(
-                    "_ga" to "GA1.1.1899212404.1785951203",
-                    "_gid" to "GA1.2.1071268545.1786650637"
-                ),
-                cacheTime = 0,
-                timeout = 30
-            ).text
-        } catch (e: Exception) {
-            ashdiErrorCount++
-            if (ashdiErrorCount >= 3) {
-                ashdiCooldownUntil = System.currentTimeMillis() + 30000
-                ashdiErrorCount = 0
-            }
+        if (html.isNullOrEmpty() || html.contains("недоступний") || html.contains("country")) {
             ashdiPosterCache[videoUrl] = ""
             return null
         }
 
-        ashdiErrorCount = 0
+        val patterns = listOf(
+            Regex("""poster\s*:\s*["']([^"']+)["']"""),
+            Regex("""((?:https?:)?//[^"'\s]+screen\.jpg)"""),
+            Regex("""((?:https?:)?//[^"'\s]+\.ashdi\.vip[^"'\s]*(?:screen|poster)[^"'\s]*)""")
+        )
 
-        if (html.isNotEmpty() && !html.contains("недоступний") && !html.contains("country")) {
-            val posterPatterns = listOf(
-                Regex("""poster\s*:\s*["']([^"']+)["']"""),
-                Regex("""((?:https?:)?//[^"'\s]+screen\.jpg)"""),
-                Regex("""((?:https?:)?//[^"'\s]+\.ashdi\.vip[^"'\s]*(?:screen|poster)[^"'\s]*)"""),
-                Regex("""((?:https?:)?//[^"'\s]+ashdi\.vip/content/[^"'\s]+\.(?:jpg|jpeg|png|webp))""")
-            )
+        for (pattern in patterns) {
+            val match = pattern.find(html) ?: continue
+            val posterUrl = match.groupValues[1]
+            val rawUrl = if (posterUrl.startsWith("http")) posterUrl else "https:$posterUrl"
 
-            for (pattern in posterPatterns) {
-                val match = pattern.find(html)
-                if (match != null) {
-                    val posterUrl = match.groupValues[1]
-                    val result = if (posterUrl.startsWith("http")) posterUrl else "https:$posterUrl"
-                    ashdiPosterCache[videoUrl] = result
-                    return result
-                }
-            }
+            ensurePosterProxy()
+
+            val key = java.util.UUID.randomUUID().toString().replace("-", "")
+            posterSources[key] = rawUrl
+
+            val proxiedUrl = "http://127.0.0.1:$posterProxyPort/poster?$key"
+
+            ashdiPosterCache[videoUrl] = proxiedUrl
+            return proxiedUrl
         }
 
         ashdiPosterCache[videoUrl] = ""
