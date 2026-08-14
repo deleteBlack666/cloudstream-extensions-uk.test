@@ -125,6 +125,23 @@ class AnimeONProvider : MainAPI() {
         val malId: Int? = 0
     )
 
+    private data class PopularAnime(
+        val id: Int,
+        val slug: String? = null,
+        val titleUa: String,
+        val titleEn: String? = null,
+        val type: String? = null,
+        val image: Image? = null
+    )
+
+    private data class PopularAnimeItem(
+        val views: Int? = null,
+        val anime: PopularAnime
+    )
+
+    private data class PopularAnimeResponse(
+        val results: List<PopularAnimeItem>
+    )
     private data class SafeTranslationsResponse(
         val translations: List<TranslationItem>
     )
@@ -644,64 +661,66 @@ class AnimeONProvider : MainAPI() {
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-    if (request.name == "Популярні аніме") {
-        val currentDate = java.text.SimpleDateFormat(
-            "yyyy-MM-dd",
-            java.util.Locale.ENGLISH
-        ).format(java.util.Date())
-        
-        val skip = (page - 1) * 24
-        val url = "${request.data}$currentDate?skip=$skip&take=24&sort=views-desc"
-        
-        val jsonText = fetchJsonOrNull(url)
-            ?: return newHomePageResponse(request.name, emptyList())
+        if (request.name == "Популярні аніме") {
+            val currentDate = java.text.SimpleDateFormat(
+                "yyyy-MM-dd",
+                java.util.Locale.ENGLISH
+            ).format(java.util.Date())
 
-        val parsedJSON = try {
-            AppUtils.parseJson<List<LocalResult>>(jsonText)
-        } catch (e: Exception) {
-            emptyList()
+            val skip = (page - 1) * 24
+            val url = "${request.data}$currentDate?skip=$skip&take=24&sort=views-desc"
+
+            val jsonText = fetchJsonOrNull(url)
+                ?: return newHomePageResponse(request.name, emptyList())
+
+            val parsedJSON = try {
+                AppUtils.parseJson<PopularAnimeResponse>(jsonText)
+            } catch (e: Exception) {
+                null
+            }
+
+            val items = parsedJSON?.results ?: emptyList()
+
+            if (items.isEmpty()) {
+                return newHomePageResponse(request.name, emptyList())
+            }
+
+            return newHomePageResponse(
+                request.name,
+                items.map { item ->
+                    newAnimeSearchResponse(item.anime.titleUa, "anime/${item.anime.id}", TvType.Anime) {
+                        this.posterUrl = item.anime.image?.preview?.let { posterApi.format(it) }
+                    }
+                },
+                hasNext = items.size >= 24
+            )
         }
 
-        if (parsedJSON.isEmpty()) {
-            return newHomePageResponse(request.name, emptyList())
+        if (request.data.contains("seasons") && page != 1) {
+            return newHomePageResponse(emptyList())
         }
 
-        return newHomePageResponse(
-            request.name,
-            parsedJSON.map {
+        val jsonText = fetchJsonOrNull(
+            if (request.data.contains("%d")) request.data.format(page) else request.data
+        ) ?: return newHomePageResponse(request.name, emptyList())
+
+        return if (!request.data.contains("seasons")) {
+            val parsedJSON = AppUtils.parseJson<SafeNewAnimeModel>(jsonText)
+
+            newHomePageResponse(request.name, parsedJSON.results.map {
                 newAnimeSearchResponse(it.titleUa, "anime/${it.id}", TvType.Anime) {
                     this.posterUrl = posterApi.format(it.image.preview)
                 }
-            },
-            hasNext = parsedJSON.size >= 24
-        )
-    }
+            })
+        } else {
+            val parsedJSON = AppUtils.parseJson<List<LocalResult>>(jsonText)
 
-    if (request.data.contains("seasons") && page != 1) {
-        return newHomePageResponse(emptyList())
-    }
-
-    val jsonText = fetchJsonOrNull(
-        if (request.data.contains("%d")) request.data.format(page) else request.data
-    ) ?: return newHomePageResponse(request.name, emptyList())
-
-    return if (!request.data.contains("seasons")) {
-        val parsedJSON = AppUtils.parseJson<SafeNewAnimeModel>(jsonText)
-
-        newHomePageResponse(request.name, parsedJSON.results.map {
-            newAnimeSearchResponse(it.titleUa, "anime/${it.id}", TvType.Anime) {
-                this.posterUrl = posterApi.format(it.image.preview)
-            }
-        })
-    } else {
-        val parsedJSON = AppUtils.parseJson<List<LocalResult>>(jsonText)
-
-        newHomePageResponse(request.name, parsedJSON.map {
-            newAnimeSearchResponse(it.titleUa, "anime/${it.id}", TvType.Anime) {
-                this.posterUrl = posterApi.format(it.image.preview)
-            }
-        })
-    }
+            newHomePageResponse(request.name, parsedJSON.map {
+                newAnimeSearchResponse(it.titleUa, "anime/${it.id}", TvType.Anime) {
+                    this.posterUrl = posterApi.format(it.image.preview)
+                }
+            })
+        }
     }
 
     override suspend fun quickSearch(query: String): List<SearchResponse> = search(query)
