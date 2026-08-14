@@ -51,6 +51,11 @@ class AnimeONProvider : MainAPI() {
     private val posterCache = java.util.concurrent.ConcurrentHashMap<String, ByteArray>()
     private val posterSources = java.util.concurrent.ConcurrentHashMap<String, String>()
     private var moonCookieHeader: String? = null
+    private val ashdiPosterCache = java.util.concurrent.ConcurrentHashMap<String, String?>()
+    private var lastAshdiRequestTime = 0L
+    private val ashdiRequestDelay = 500L
+    private var ashdiErrorCount = 0
+    private var ashdiCooldownUntil = 0L
 
     private val posterHttpClient = okhttp3.OkHttpClient.Builder()
         .connectTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
