@@ -817,9 +817,9 @@ class AnimeONProvider : MainAPI() {
                             "$mainUrl/api/player/$animeId/episodes?take=100&playerId=${player.id}&translationId=$translationId"
 
                         val maxSkip = if (player.episodesCount > 0) {
-                            (player.episodesCount / 100 + 2) * 100
+                            (player.episodesCount / 100 + 10) * 100
                         } else {
-                            11000
+                            20000
                         }
 
                         for (includeAlt in listOf("true", "false")) {
@@ -1110,9 +1110,9 @@ class AnimeONProvider : MainAPI() {
                         "$mainUrl/api/player/$animeId/episodes?take=100&playerId=${player.id}&translationId=$translationId"
 
                     val maxSkip = if (player.episodesCount > 0) {
-                        (player.episodesCount / 100 + 2) * 100
+                        (player.episodesCount / 100 + 10) * 100
                     } else {
-                        11000
+                        20000
                     }
 
                     for (includeAlt in listOf("true", "false")) {
