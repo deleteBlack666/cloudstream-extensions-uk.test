@@ -574,8 +574,8 @@ class AnimeONProvider : MainAPI() {
             )
         )
 
-        if (html.isNullOrEmpty() || html.contains("недоступний") || html.contains("country")) {
-            Log.e(TAG, "fetchAshdiPosterSync blocked/empty for ${videoUrl.take(60)}, htmlLen=${html?.length ?: 0}")
+        if (!html.contains("new Playerjs") && html.contains("country")) {
+            Log.e(TAG, "fetchAshdiPosterSync geoblocked for ${videoUrl.take(60)}")
             ashdiPosterCache[videoUrl] = ""
             return null
         }
