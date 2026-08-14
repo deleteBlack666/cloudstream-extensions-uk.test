@@ -823,7 +823,21 @@ class AnimeONProvider : MainAPI() {
                         }
 
                         for (includeAlt in listOf("true", "false")) {
-                            var skip = -1
+                            val epJsonMinus1 = fetchJsonOrNull("$baseUrl&skip=-1&includeAlternative=$includeAlt")
+
+                            if (epJsonMinus1 != null) {
+                                val eps = try {
+                                    AppUtils.parseJson<SafePlayerEpisodes>(epJsonMinus1).episodes
+                                } catch (e: Exception) {
+                                    null
+                                }
+
+                                eps?.filter { it.episode <= 0 && seenIDs.add(it.id) }?.let {
+                                    collected.addAll(it)
+                                }
+                            }
+
+                            var skip = 0
 
                             while (skip <= maxSkip) {
                                 val epJson = fetchJsonOrNull("$baseUrl&skip=$skip&includeAlternative=$includeAlt") ?: break
@@ -1102,7 +1116,21 @@ class AnimeONProvider : MainAPI() {
                     }
 
                     for (includeAlt in listOf("true", "false")) {
-                        var skip = -1
+                        val epJsonMinus1 = fetchJsonWithRetry("$baseUrl&skip=-1&includeAlternative=$includeAlt")
+
+                        if (epJsonMinus1 != null) {
+                            val eps = try {
+                                AppUtils.parseJson<SafePlayerEpisodes>(epJsonMinus1).episodes
+                            } catch (e: Exception) {
+                                null
+                            }
+
+                            eps?.filter { it.episode <= 0 && seenIDs.add(it.id) }?.let {
+                                collected.addAll(it)
+                            }
+                        }
+
+                        var skip = 0
 
                         while (skip <= maxSkip) {
                             val epJson = fetchJsonWithRetry("$baseUrl&skip=$skip&includeAlternative=$includeAlt") ?: break
