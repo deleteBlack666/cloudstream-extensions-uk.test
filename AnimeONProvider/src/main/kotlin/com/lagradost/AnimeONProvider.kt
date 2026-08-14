@@ -51,7 +51,7 @@ class AnimeONProvider : MainAPI() {
     private val posterCache = java.util.concurrent.ConcurrentHashMap<String, ByteArray>()
     private val posterSources = java.util.concurrent.ConcurrentHashMap<String, String>()
     private var moonCookieHeader: String? = null
-    private val ashdiPosterCache = java.util.concurrent.ConcurrentHashMap<String, String?>()
+    private val ashdiPosterCache = java.util.concurrent.ConcurrentHashMap<String, String>()
     private var lastAshdiRequestTime = 0L
     private val ashdiRequestDelay = 500L
     private var ashdiErrorCount = 0
@@ -491,7 +491,8 @@ private suspend fun getAshdiPoster(videoUrl: String?): String? {
         if (!videoUrl.contains("ashdi.vip")) return null
 
         if (ashdiPosterCache.containsKey(videoUrl)) {
-            return ashdiPosterCache[videoUrl]
+            val cached = ashdiPosterCache[videoUrl]
+            return if (cached.isNullOrEmpty()) null else cached
         }
 
         val currentTime = System.currentTimeMillis()
@@ -502,7 +503,12 @@ private suspend fun getAshdiPoster(videoUrl: String?): String? {
         if (lastAshdiRequestTime > 0) {
             val timeSinceLastRequest = currentTime - lastAshdiRequestTime
             if (timeSinceLastRequest < ashdiRequestDelay) {
-                Thread.sleep(ashdiRequestDelay - timeSinceLastRequest)
+                try {
+                    Thread.sleep(ashdiRequestDelay - timeSinceLastRequest)
+                } catch (e: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    return null
+                }
             }
         }
         lastAshdiRequestTime = System.currentTimeMillis()
@@ -538,7 +544,7 @@ private suspend fun getAshdiPoster(videoUrl: String?): String? {
                 ashdiCooldownUntil = System.currentTimeMillis() + 30000
                 ashdiErrorCount = 0
             }
-            ashdiPosterCache[videoUrl] = null
+            ashdiPosterCache[videoUrl] = ""
             return null
         }
 
@@ -563,7 +569,7 @@ private suspend fun getAshdiPoster(videoUrl: String?): String? {
             }
         }
 
-        ashdiPosterCache[videoUrl] = null
+        ashdiPosterCache[videoUrl] = ""
         return null
 }
 
