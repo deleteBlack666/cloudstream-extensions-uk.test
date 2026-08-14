@@ -68,6 +68,11 @@ class AnimeONProvider : MainAPI() {
         }
         .build()
 
+    private val htmlHttpClient = okhttp3.OkHttpClient.Builder()
+        .connectTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
+        .readTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
+        .build()
+
     private fun currentSeasonLabel(): String {
         val cal = java.util.Calendar.getInstance()
         val month = cal.get(java.util.Calendar.MONTH) + 1
@@ -497,7 +502,7 @@ class AnimeONProvider : MainAPI() {
             if (cookies.isNotEmpty()) {
                 builder.header("Cookie", cookies.entries.joinToString("; ") { "${it.key}=${it.value}" })
             }
-            val response = posterHttpClient.newCall(builder.build()).execute()
+            val response = htmlHttpClient.newCall(builder.build()).execute()
             val body = if (response.isSuccessful) response.body?.string() ?: "" else ""
             response.close()
             body
