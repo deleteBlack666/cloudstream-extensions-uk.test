@@ -7,8 +7,6 @@ import com.lagradost.cloudstream3.utils.AppUtils
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.M3u8Helper
 import com.lagradost.models.*
-import kotlinx.coroutines.delay
-
 class AnimeONProvider : MainAPI() {
 
     override var mainUrl = "https://animeon.club"
@@ -53,11 +51,6 @@ class AnimeONProvider : MainAPI() {
     private val posterCache = java.util.concurrent.ConcurrentHashMap<String, ByteArray>()
     private val posterSources = java.util.concurrent.ConcurrentHashMap<String, String>()
     private var moonCookieHeader: String? = null
-    private val ashdiPosterCache = java.util.concurrent.ConcurrentHashMap<String, String?>()
-    private var lastAshdiRequestTime = 0L
-    private val ashdiRequestDelay = 500L
-    private var ashdiErrorCount = 0
-    private var ashdiCooldownUntil = 0L
 
     private val posterHttpClient = okhttp3.OkHttpClient.Builder()
         .connectTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
@@ -487,6 +480,7 @@ class AnimeONProvider : MainAPI() {
         }
     }
 
+
 private suspend fun getAshdiPoster(videoUrl: String?): String? {
         if (videoUrl.isNullOrEmpty()) return null
         if (!videoUrl.contains("ashdi.vip")) return null
@@ -503,7 +497,7 @@ private suspend fun getAshdiPoster(videoUrl: String?): String? {
         if (lastAshdiRequestTime > 0) {
             val timeSinceLastRequest = currentTime - lastAshdiRequestTime
             if (timeSinceLastRequest < ashdiRequestDelay) {
-                delay(ashdiRequestDelay - timeSinceLastRequest)
+                Thread.sleep(ashdiRequestDelay - timeSinceLastRequest)
             }
         }
         lastAshdiRequestTime = System.currentTimeMillis()
