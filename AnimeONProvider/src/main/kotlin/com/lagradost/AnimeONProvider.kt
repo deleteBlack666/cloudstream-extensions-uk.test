@@ -52,6 +52,11 @@ class AnimeONProvider : MainAPI() {
     private val posterCache = java.util.concurrent.ConcurrentHashMap<String, ByteArray>()
     private val posterSources = java.util.concurrent.ConcurrentHashMap<String, String>()
     private var moonCookieHeader: String? = null
+    private val ashdiPosterCache = java.util.concurrent.ConcurrentHashMap<String, String?>()
+    private var lastAshdiRequestTime = 0L
+    private val ashdiRequestDelay = 500L
+    private var ashdiErrorCount = 0
+    private var ashdiCooldownUntil = 0L
 
     private val posterHttpClient = okhttp3.OkHttpClient.Builder()
         .connectTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
@@ -484,6 +489,23 @@ class AnimeONProvider : MainAPI() {
     private suspend fun getAshdiPoster(videoUrl: String?): String? {
         if (videoUrl.isNullOrEmpty()) return null
         if (!videoUrl.contains("ashdi.vip")) return null
+        
+        if (ashdiPosterCache.containsKey(videoUrl)) {
+            return ashdiPosterCache[videoUrl]
+        }
+        
+        val currentTime = System.currentTimeMillis()
+        if (currentTime < ashdiCooldownUntil) {
+            return null
+        }
+        
+        if (lastAshdiRequestTime > 0) {
+            val timeSinceLastRequest = currentTime - lastAshdiRequestTime
+            if (timeSinceLastRequest < ashdiRequestDelay) {
+                kotlinx.coroutines.delay(ashdiRequestDelay - timeSinceLastRequest)
+            }
+        }
+        lastAshdiRequestTime = System.currentTimeMillis()
 
         val url = if (videoUrl.contains("?")) {
             videoUrl
@@ -499,18 +521,30 @@ class AnimeONProvider : MainAPI() {
                     "Referer" to "$mainUrl/",
                     "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
                     "Accept-Language" to "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
-                    "Cookie" to "_ga=GA1.1.1899212404.1785951203; _gid=GA1.2.1071268545.1786650637",
                     "Sec-Fetch-Dest" to "document",
                     "Sec-Fetch-Mode" to "navigate",
                     "Sec-Fetch-Site" to "none"
                 ),
-                cacheTime = 0
+                cookies = mapOf(
+                    "_ga" to "GA1.1.1899212404.1785951203",
+                    "_gid" to "GA1.2.1071268545.1786650637"
+                ),
+                cacheTime = 0,
+                timeout = 30
             ).text
         } catch (e: Exception) {
-            ""
+            ashdiErrorCount++
+            if (ashdiErrorCount >= 3) {
+                ashdiCooldownUntil = System.currentTimeMillis() + 30000
+                ashdiErrorCount = 0
+            }
+            ashdiPosterCache[videoUrl] = null
+            return null
         }
+        
+        ashdiErrorCount = 0
 
-        if (html.isNotEmpty() && !html.contains("недоступний")) {
+        if (html.isNotEmpty() && !html.contains("недоступний") && !html.contains("country")) {
             val posterPatterns = listOf(
                 Regex("""poster\s*:\s*["']([^"']+)["']"""),
                 Regex("""((?:https?:)?//[^"'\s]+screen\.jpg)"""),
@@ -523,11 +557,13 @@ class AnimeONProvider : MainAPI() {
                 if (match != null) {
                     val posterUrl = match.groupValues[1]
                     val result = if (posterUrl.startsWith("http")) posterUrl else "https:$posterUrl"
+                    ashdiPosterCache[videoUrl] = result
                     return result
                 }
             }
         }
 
+        ashdiPosterCache[videoUrl] = null
         return null
     }
 
