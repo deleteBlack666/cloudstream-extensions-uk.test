@@ -55,7 +55,7 @@ class AnimeONProvider : MainAPI() {
 
     private val ashdiPosterCache = java.util.concurrent.ConcurrentHashMap<String, String>()
     private val episodePosterCache = java.util.concurrent.ConcurrentHashMap<String, String>()
-    private val posterFetchExecutor = java.util.concurrent.Executors.newFixedThreadPool(8)
+    private val posterFetchExecutor = java.util.concurrent.Executors.newFixedThreadPool(16)
 
     private val posterHttpClient = okhttp3.OkHttpClient.Builder()
         .connectTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
@@ -653,7 +653,7 @@ class AnimeONProvider : MainAPI() {
 
         val result = java.util.concurrent.ConcurrentHashMap<Int, String>()
         val start = System.currentTimeMillis()
-        val deadline = 20000L
+        val deadline = 55000L
         val latch = java.util.concurrent.CountDownLatch(tasks.size)
 
         for ((epNum, episodeId) in tasks) {
@@ -682,7 +682,7 @@ class AnimeONProvider : MainAPI() {
             }
         }
 
-        latch.await(deadline + 15000, java.util.concurrent.TimeUnit.MILLISECONDS)
+        latch.await(deadline + 5000, java.util.concurrent.TimeUnit.MILLISECONDS)
 
         return result
     }
