@@ -7,6 +7,7 @@ import com.lagradost.cloudstream3.utils.AppUtils
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.M3u8Helper
 import com.lagradost.models.*
+import kotlinx.coroutines.delay
 
 class AnimeONProvider : MainAPI() {
 
@@ -486,23 +487,23 @@ class AnimeONProvider : MainAPI() {
         }
     }
 
-    private suspend fun getAshdiPoster(videoUrl: String?): String? {
+private suspend fun getAshdiPoster(videoUrl: String?): String? {
         if (videoUrl.isNullOrEmpty()) return null
         if (!videoUrl.contains("ashdi.vip")) return null
-        
+
         if (ashdiPosterCache.containsKey(videoUrl)) {
             return ashdiPosterCache[videoUrl]
         }
-        
+
         val currentTime = System.currentTimeMillis()
         if (currentTime < ashdiCooldownUntil) {
             return null
         }
-        
+
         if (lastAshdiRequestTime > 0) {
             val timeSinceLastRequest = currentTime - lastAshdiRequestTime
             if (timeSinceLastRequest < ashdiRequestDelay) {
-                kotlinx.coroutines.delay(ashdiRequestDelay - timeSinceLastRequest)
+                delay(ashdiRequestDelay - timeSinceLastRequest)
             }
         }
         lastAshdiRequestTime = System.currentTimeMillis()
@@ -541,7 +542,7 @@ class AnimeONProvider : MainAPI() {
             ashdiPosterCache[videoUrl] = null
             return null
         }
-        
+
         ashdiErrorCount = 0
 
         if (html.isNotEmpty() && !html.contains("недоступний") && !html.contains("country")) {
@@ -565,7 +566,7 @@ class AnimeONProvider : MainAPI() {
 
         ashdiPosterCache[videoUrl] = null
         return null
-    }
+}
 
     private suspend fun getMoonPoster(iframeUrl: String): String? {
         if (!iframeUrl.contains("/iframe/")) return null
