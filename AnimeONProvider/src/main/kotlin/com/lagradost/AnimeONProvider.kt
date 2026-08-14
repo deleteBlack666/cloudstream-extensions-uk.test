@@ -1,6 +1,5 @@
 package com.lagradost
 
-import android.util.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addMalId
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
@@ -10,8 +9,6 @@ import com.lagradost.cloudstream3.utils.M3u8Helper
 import com.lagradost.models.*
 
 class AnimeONProvider : MainAPI() {
-
-    private val TAG = "AnimeOn"
 
     override var mainUrl = "https://animeon.club"
     override var name = "AnimeON"
@@ -248,7 +245,6 @@ class AnimeONProvider : MainAPI() {
 
         val serverSocket = java.net.ServerSocket(0)
         posterProxyPort = serverSocket.localPort
-        Log.e(TAG, "Poster proxy started on port $posterProxyPort")
 
         Thread {
             while (!serverSocket.isClosed) {
@@ -265,8 +261,6 @@ class AnimeONProvider : MainAPI() {
                             val originalUrl = posterSources[key]
                             val out = client.getOutputStream()
 
-                            Log.e(TAG, "Proxy request for key=$key, url=${originalUrl?.take(80)}")
-
                             if (originalUrl.isNullOrEmpty()) {
                                 out.write("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray())
                                 out.flush()
@@ -282,15 +276,11 @@ class AnimeONProvider : MainAPI() {
                                     posterCache[originalUrl] = fetched
                                     body = fetched
                                 }
-                                Log.e(TAG, "Proxy fetched ${fetched.size} bytes for $originalUrl")
-                            } else {
-                                Log.e(TAG, "Proxy cache hit ${body.size} bytes for $originalUrl")
                             }
 
                             val finalBody = body ?: ByteArray(0)
 
                             if (finalBody.isEmpty()) {
-                                Log.e(TAG, "Proxy returning 404 for $originalUrl")
                                 out.write("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray())
                             } else {
                                 val contentType = when {
@@ -317,7 +307,6 @@ class AnimeONProvider : MainAPI() {
 
                             out.flush()
                         } catch (e: Exception) {
-                            Log.e(TAG, "Proxy error: ${e.message}")
                         } finally {
                             try {
                                 client.close()
@@ -326,7 +315,6 @@ class AnimeONProvider : MainAPI() {
                         }
                     }.also { it.isDaemon = true }.start()
                 } catch (e: Exception) {
-                    Log.e(TAG, "Server error: ${e.message}")
                 }
             }
         }.also { it.isDaemon = true }.start()
@@ -404,7 +392,6 @@ class AnimeONProvider : MainAPI() {
             val response = posterHttpClient.newCall(requestBuilder.build()).execute()
 
             if (!response.isSuccessful) {
-                Log.e(TAG, "fetchPosterBytes failed: ${response.code} for ${originalUrl.take(80)}")
                 response.close()
                 return ByteArray(0)
             }
@@ -412,10 +399,8 @@ class AnimeONProvider : MainAPI() {
             val bytes = response.body?.bytes() ?: ByteArray(0)
             response.close()
 
-            Log.e(TAG, "fetchPosterBytes success: ${bytes.size} bytes for ${originalUrl.take(80)}")
             bytes
         } catch (e: Exception) {
-            Log.e(TAG, "fetchPosterBytes exception: ${e.message} for ${originalUrl.take(80)}")
             ByteArray(0)
         }
     }
@@ -516,13 +501,10 @@ class AnimeONProvider : MainAPI() {
                 builder.header("Cookie", cookies.entries.joinToString("; ") { "${it.key}=${it.value}" })
             }
             val response = htmlHttpClient.newCall(builder.build()).execute()
-            val statusCode = response.code
             val body = if (response.isSuccessful) response.body?.string() ?: "" else ""
             response.close()
-            Log.e(TAG, "httpGetText: $statusCode, bodyLen=${body.length} for ${url.take(100)}")
             body
         } catch (e: Exception) {
-            Log.e(TAG, "httpGetText exception: ${e.message} for ${url.take(100)}")
             null
         }
     }
@@ -539,11 +521,8 @@ class AnimeONProvider : MainAPI() {
 
         return try {
             val resp = AppUtils.parseJson<EpisodeVideoResponse>(json)
-            val result = resp.videoUrl ?: resp.fileUrl
-            Log.e(TAG, "fetchEpisodeVideoUrlSync ep=$episodeId -> ${result?.take(80) ?: "null"}")
-            result
+            resp.videoUrl ?: resp.fileUrl
         } catch (e: Exception) {
-            Log.e(TAG, "fetchEpisodeVideoUrlSync parse error ep=$episodeId: ${e.message}")
             null
         }
     }
@@ -551,7 +530,6 @@ class AnimeONProvider : MainAPI() {
     private fun fetchAshdiPosterSync(videoUrl: String): String? {
         if (ashdiPosterCache.containsKey(videoUrl)) {
             val cached = ashdiPosterCache[videoUrl]
-            Log.e(TAG, "fetchAshdiPosterSync cache hit for ${videoUrl.take(60)} -> ${if (cached.isNullOrEmpty()) "empty" else cached?.take(60)}")
             return if (cached.isNullOrEmpty()) null else cached
         }
 
@@ -575,20 +553,15 @@ class AnimeONProvider : MainAPI() {
         )
 
         if (html.isNullOrEmpty() || html.contains("недоступний")) {
-            Log.e(TAG, "fetchAshdiPosterSync empty/blocked for ${videoUrl.take(60)}, htmlLen=${html?.length ?: 0}")
             ashdiPosterCache[videoUrl] = ""
             return null
         }
 
         // Геоблок: якщо немає Playerjs, але є "country" — це блок-сторінка
         if (!html.contains("new Playerjs") && html.contains("country")) {
-            Log.e(TAG, "fetchAshdiPosterSync geoblocked for ${videoUrl.take(60)}")
             ashdiPosterCache[videoUrl] = ""
             return null
         }
-
-        Log.e(TAG, "fetchAshdiPosterSync html preview: ${html.take(500)}")
-        Log.e(TAG, "fetchAshdiPosterSync contains 'poster': ${html.contains("poster")}, contains 'Playerjs': ${html.contains("Playerjs")}")
 
         val patterns = listOf(
             Regex("""poster["']?\s*:\s*["']([^"']+)["']"""),
@@ -610,12 +583,10 @@ class AnimeONProvider : MainAPI() {
                 val proxiedUrl = "http://127.0.0.1:$posterProxyPort/poster?$key"
 
                 ashdiPosterCache[videoUrl] = proxiedUrl
-                Log.e(TAG, "fetchAshdiPosterSync found pattern[$i]: ${rawUrl.take(80)} -> proxied")
                 return proxiedUrl
             }
         }
 
-        Log.e(TAG, "fetchAshdiPosterSync no pattern matched, htmlLen=${html.length}, first 300 chars: ${html.take(300)}")
         ashdiPosterCache[videoUrl] = ""
         return null
     }
@@ -645,7 +616,6 @@ class AnimeONProvider : MainAPI() {
         )
 
         if (html.isNullOrEmpty()) {
-            Log.e(TAG, "fetchMoonPosterSync empty html for ${iframeUrl.take(60)}")
             return null
         }
 
@@ -677,7 +647,6 @@ class AnimeONProvider : MainAPI() {
         }
 
         if (posterUrl.isNullOrEmpty() || posterUrl.contains("mooncdn.")) {
-            Log.e(TAG, "fetchMoonPosterSync no poster found for ${iframeUrl.take(60)}")
             return null
         }
 
@@ -686,7 +655,6 @@ class AnimeONProvider : MainAPI() {
         val key = java.util.UUID.randomUUID().toString().replace("-", "")
         posterSources[key] = posterUrl
 
-        Log.e(TAG, "fetchMoonPosterSync found: ${posterUrl.take(80)}")
         return "http://127.0.0.1:$posterProxyPort/poster?$key"
     }
 
@@ -697,13 +665,6 @@ class AnimeONProvider : MainAPI() {
         val start = System.currentTimeMillis()
         val deadline = 55000L
         val latch = java.util.concurrent.CountDownLatch(tasks.size)
-
-        Log.e(TAG, "fetchPostersParallel: starting ${tasks.size} tasks for animeId=$animeId, deadline=${deadline}ms")
-
-        var completed = 0
-        var found = 0
-        var skipped = 0
-        var errors = 0
 
         for ((epNum, episodeId) in tasks) {
             posterFetchExecutor.submit {
@@ -722,33 +683,17 @@ class AnimeONProvider : MainAPI() {
                             if (!poster.isNullOrEmpty()) {
                                 result[epNum] = poster
                                 episodePosterCache["$animeId:$epNum"] = poster
-                                found++
-                            } else {
-                                skipped++
                             }
-                        } else {
-                            skipped++
                         }
-                    } else {
-                        skipped++
                     }
                 } catch (e: Exception) {
-                    errors++
-                    Log.e(TAG, "fetchPostersParallel error ep=$epNum: ${e.message}")
                 } finally {
-                    completed++
-                    if (completed % 50 == 0 || completed == tasks.size) {
-                        Log.e(TAG, "fetchPostersParallel progress: $completed/${tasks.size}, found=$found, skipped=$skipped, errors=$errors, elapsed=${System.currentTimeMillis() - start}ms")
-                    }
                     latch.countDown()
                 }
             }
         }
 
-        val waited = latch.await(deadline + 5000, java.util.concurrent.TimeUnit.MILLISECONDS)
-        val totalElapsed = System.currentTimeMillis() - start
-
-        Log.e(TAG, "fetchPostersParallel done: awaited=$waited, total=${tasks.size}, found=${result.size}, skipped=$skipped, errors=$errors, elapsed=${totalElapsed}ms")
+        latch.await(deadline + 5000, java.util.concurrent.TimeUnit.MILLISECONDS)
 
         return result
     }
@@ -992,8 +937,6 @@ class AnimeONProvider : MainAPI() {
         val animeId = url.substringAfterLast("/").substringBefore("-").toIntOrNull()
             ?: throw Exception("Invalid anime ID in URL: $url")
 
-        Log.e(TAG, "load() starting for animeId=$animeId")
-
         val realApiUrl = resolveAnimeApiUrl(animeId)
 
         val jsonText = fetchJsonOrNull(realApiUrl)
@@ -1096,8 +1039,6 @@ class AnimeONProvider : MainAPI() {
                     }
                 }
 
-                Log.e(TAG, "load() collected ${episodeSources.size} episodes")
-
                 val directPosters = mutableMapOf<Int, String>()
                 val posterTasks = mutableListOf<Pair<Int, Int>>()
 
@@ -1122,12 +1063,7 @@ class AnimeONProvider : MainAPI() {
                     }
                 }
 
-                Log.e(TAG, "load() directPosters=${directPosters.size}, posterTasks=${posterTasks.size}")
-
                 val fetchedPosters = fetchPostersParallel(animeId, posterTasks)
-
-                var postersAssigned = 0
-                var postersNull = 0
 
                 episodeSources.keys.sorted().forEach { epNum ->
                     val sources = episodeSources[epNum] ?: return@forEach
@@ -1137,8 +1073,6 @@ class AnimeONProvider : MainAPI() {
                     if (epPoster != null && epPoster.contains("mooncdn.")) {
                         epPoster = null
                     }
-
-                    if (epPoster != null) postersAssigned++ else postersNull++
 
                     val dataJson = org.json.JSONArray().also { arr ->
                         sources.forEach { s ->
@@ -1160,10 +1094,7 @@ class AnimeONProvider : MainAPI() {
                         }
                     )
                 }
-
-                Log.e(TAG, "load() final: postersAssigned=$postersAssigned, postersNull=$postersNull")
             } catch (e: Exception) {
-                Log.e(TAG, "load() exception: ${e.message}")
             }
         }
 
