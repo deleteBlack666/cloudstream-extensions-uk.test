@@ -53,7 +53,7 @@ class AnimeONProvider : MainAPI() {
     private var moonCookieHeader: String? = null
     private val ashdiPosterCache = java.util.concurrent.ConcurrentHashMap<String, String>()
     private var lastAshdiRequestTime = 0L
-    private val ashdiRequestDelay = 500L
+    private val ashdiRequestDelay = 150L
     private var ashdiErrorCount = 0
     private var ashdiCooldownUntil = 0L
 
