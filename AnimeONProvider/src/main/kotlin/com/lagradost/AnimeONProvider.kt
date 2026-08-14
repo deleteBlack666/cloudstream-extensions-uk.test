@@ -580,8 +580,11 @@ class AnimeONProvider : MainAPI() {
             return null
         }
 
+        Log.e(TAG, "fetchAshdiPosterSync html preview: ${html.take(500)}")
+        Log.e(TAG, "fetchAshdiPosterSync contains 'poster': ${html.contains("poster")}, contains 'Playerjs': ${html.contains("Playerjs")}")
+
         val patterns = listOf(
-            Regex("""poster\s*:\s*["']([^"']+)["']"""),
+            Regex("""poster["']?\s*:\s*["']([^"']+)["']"""),
             Regex("""((?:https?:)?//[^"'\s]+screen\.jpg)"""),
             Regex("""((?:https?:)?//[^"'\s]+\.ashdi\.vip[^"'\s]*(?:screen|poster)[^"'\s]*)""")
         )
@@ -605,7 +608,7 @@ class AnimeONProvider : MainAPI() {
             }
         }
 
-        Log.e(TAG, "fetchAshdiPosterSync no pattern matched, htmlLen=${html.length}")
+        Log.e(TAG, "fetchAshdiPosterSync no pattern matched, htmlLen=${html.length}, first 300 chars: ${html.take(300)}")
         ashdiPosterCache[videoUrl] = ""
         return null
     }
