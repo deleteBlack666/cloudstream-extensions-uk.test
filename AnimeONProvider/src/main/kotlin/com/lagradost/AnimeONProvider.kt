@@ -486,7 +486,6 @@ class AnimeONProvider : MainAPI() {
     }
 
     private suspend fun fetchEpisodeInfoMap(slug: String): Map<Int, String> {
-        // ВИКОРИСТОВУЄМО SLUG замість ID, інакше сервер зависає!
         val infoJson = fetchJsonOrNull("$mainUrl/api/anime/$slug/episodes-info") ?: return emptyMap()
         
         return try {
@@ -811,7 +810,7 @@ class AnimeONProvider : MainAPI() {
         // ВИКОНУЄМО КІЛЬКА ЗАПИТІВ ПАРАЛЕЛЬНО для економії часу
         val executor = java.util.concurrent.Executors.newFixedThreadPool(4)
         
-        val slugFuture = executor.submit<java.util.concurrent.Callable<String>> {
+        val slugFuture = executor.submit(java.util.concurrent.Callable<String> {
             val initial = fetchJsonOrNullSync("$apiUrl/$animeId", timeoutSeconds = 8)
             if (initial != null) {
                 try {
@@ -819,13 +818,13 @@ class AnimeONProvider : MainAPI() {
                     if (redirect?.moved == true && !redirect.slug.isNullOrEmpty()) redirect.slug!! else animeId.toString()
                 } catch (e: Exception) { animeId.toString() }
             } else animeId.toString()
-        }
+        })
         
-        val translationsFuture = executor.submit<java.util.concurrent.Callable<String?>> {
+        val translationsFuture = executor.submit(java.util.concurrent.Callable<String?> {
             fetchJsonOrNullSync("$mainUrl/api/player/$animeId/translations", timeoutSeconds = 8)
-        }
+        })
         
-        val franchiseFuture = executor.submit<java.util.concurrent.Callable<List<SearchResponse>>> {
+        val franchiseFuture = executor.submit(java.util.concurrent.Callable<List<SearchResponse>> {
             try {
                 val json = fetchJsonOrNullSync("$mainUrl/api/franchise/full/$animeId", timeoutSeconds = 10)
                 if (json != null) {
@@ -837,11 +836,11 @@ class AnimeONProvider : MainAPI() {
                     }
                 } else emptyList()
             } catch (e: Exception) { emptyList() }
-        }
+        })
 
-        val slug = try { slugFuture.get(10, java.util.concurrent.TimeUnit.SECONDS) } catch (e: Exception) { animeId.toString() }
-        val translationsJson = try { translationsFuture.get(10, java.util.concurrent.TimeUnit.SECONDS) } catch (e: Exception) { null }
-        val franchise = try { franchiseFuture.get(12, java.util.concurrent.TimeUnit.SECONDS) } catch (e: Exception) { emptyList() }
+        val slug: String = try { slugFuture.get(10, java.util.concurrent.TimeUnit.SECONDS) } catch (e: Exception) { animeId.toString() }
+        val translationsJson: String? = try { translationsFuture.get(10, java.util.concurrent.TimeUnit.SECONDS) } catch (e: Exception) { null }
+        val franchise: List<SearchResponse> = try { franchiseFuture.get(12, java.util.concurrent.TimeUnit.SECONDS) } catch (e: Exception) { emptyList() }
 
         // Тепер отримуємо повну інфу про аніме за SLUG (це працює швидко)
         val realApiUrl = "$apiUrl/$slug"
@@ -892,7 +891,7 @@ class AnimeONProvider : MainAPI() {
                                 val tName = translation.translation.name
                                 val pName = player.name
                                 
-                                futures.add(episodeExecutor.submit<CollectedEpisodes> {
+                                futures.add(episodeExecutor.submit(java.util.concurrent.Callable<CollectedEpisodes> {
                                     val collected = mutableListOf<FundubEpisode>()
                                     val seenIDs = mutableSetOf<Int>()
 
@@ -916,7 +915,7 @@ class AnimeONProvider : MainAPI() {
                                         skip += 1000
                                     }
                                     CollectedEpisodes(tName, pName, collected)
-                                })
+                                }))
                             }
                         }
                     }
