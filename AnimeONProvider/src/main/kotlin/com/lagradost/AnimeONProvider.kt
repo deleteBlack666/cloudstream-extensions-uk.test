@@ -438,7 +438,28 @@ class AnimeONProvider : MainAPI() {
         }
     }
 
-    
+    private fun fetchJsonOrNullSync(url: String, timeoutSeconds: Int = 8): String? {
+        return try {
+            val request = okhttp3.Request.Builder()
+                .url(url)
+                .header("Referer", mainUrl)
+                .header("User-Agent", userAgent)
+                .get()
+                .build()
+
+            val response = htmlHttpClient.newCall(request).execute()
+            val text = if (response.isSuccessful) response.body?.string() else null
+            response.close()
+
+            if (text != null && !text.trimStart().startsWith("{") && !text.trimStart().startsWith("[")) {
+                null
+            } else {
+                text
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
 
     private suspend fun fetchJsonWithRetry(url: String, retries: Int = 3): String? {
         repeat(retries) {
@@ -777,14 +798,12 @@ class AnimeONProvider : MainAPI() {
         }
     }
 
-     
     override suspend fun load(url: String): LoadResponse {
         val animeId = url.substringAfterLast("/").substringBefore("-").toIntOrNull()
             ?: throw Exception("Invalid anime ID in URL: $url")
 
         val executor = java.util.concurrent.Executors.newFixedThreadPool(4)
         
-        // ОПТИМІЗАЦІЯ: Отримуємо slug І повну інфу в одному future
         val animeInfoFuture = executor.submit(java.util.concurrent.Callable<Pair<String, String?>> {
             val initial = fetchJsonOrNullSync("$apiUrl/$animeId", timeoutSeconds = 8)
             val slug = if (initial != null) {
@@ -794,7 +813,6 @@ class AnimeONProvider : MainAPI() {
                 } catch (e: Exception) { animeId.toString() }
             } else animeId.toString()
             
-            // Одразу отримуємо повну інфу за slug
             val animeInfoJson = fetchJsonOrNullSync("$apiUrl/$slug", timeoutSeconds = 8)
             Pair(slug, animeInfoJson)
         })
@@ -817,7 +835,6 @@ class AnimeONProvider : MainAPI() {
             } catch (e: Exception) { emptyList() }
         })
 
-        // ВИПРАВЛЕНО: Прибрано анотацію типу з деструктуризації
         val (slug, jsonText) = try { 
             animeInfoFuture.get(10, java.util.concurrent.TimeUnit.SECONDS) 
         } catch (e: Exception) { 
@@ -1022,7 +1039,6 @@ class AnimeONProvider : MainAPI() {
             }
         }
     }
-    
 
     override suspend fun loadLinks(
         data: String,
