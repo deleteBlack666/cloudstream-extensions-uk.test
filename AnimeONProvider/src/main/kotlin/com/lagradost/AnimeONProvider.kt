@@ -7,12 +7,6 @@ import com.lagradost.cloudstream3.utils.AppUtils
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.M3u8Helper
 import com.lagradost.models.*
-import kotlinx.coroutines.Deferred
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
 
 class AnimeONProvider : MainAPI() {
 
@@ -62,6 +56,8 @@ class AnimeONProvider : MainAPI() {
     
     private data class PosterFetchTask(val episodeId: Int, val animeId: Int)
     private val posterFetchTasks = java.util.concurrent.ConcurrentHashMap<String, PosterFetchTask>()
+    
+    private data class CollectedEpisodes(val translationName: String, val playerName: String, val episodes: List<FundubEpisode>)
 
     private val posterHttpClient = okhttp3.OkHttpClient.Builder()
         .connectTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
@@ -271,9 +267,6 @@ class AnimeONProvider : MainAPI() {
                             if (body == null) {
                                 val task = posterFetchTasks[key]
                                 if (task != null) {
-                                    // Це блокує потік проксі, але НЕ UI!
-                                    // Glide буде чекати на HTTP відповідь, тому placeholder залишиться на екрані,
-                                    // поки байти не будуть готові.
                                     body = fetchEpisodePosterBytes(task.episodeId)
                                     if (body != null && body.isNotEmpty()) {
                                         posterCache[key] = body
@@ -438,6 +431,29 @@ class AnimeONProvider : MainAPI() {
                 null
             } else {
                 response
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun fetchJsonOrNullSync(url: String): String? {
+        return try {
+            val request = okhttp3.Request.Builder()
+                .url(url)
+                .header("Referer", mainUrl)
+                .header("User-Agent", userAgent)
+                .get()
+                .build()
+
+            val response = htmlHttpClient.newCall(request).execute()
+            val text = if (response.isSuccessful) response.body?.string() else null
+            response.close()
+
+            if (text != null && !text.trimStart().startsWith("{") && !text.trimStart().startsWith("[")) {
+                null
+            } else {
+                text
             }
         } catch (e: Exception) {
             null
@@ -836,19 +852,17 @@ class AnimeONProvider : MainAPI() {
                 val translations = AppUtils.parseJson<SafeTranslationsResponse>(translationsJson).translations
                 val episodeSources = java.util.concurrent.ConcurrentHashMap<Int, MutableList<EpisodeSource>>()
 
-                data class CollectedEpisodes(val translationName: String, val playerName: String, val episodes: List<FundubEpisode>)
+                // Паралельне завантаження списків епізодів через Java ExecutorService.
+                // Це не блокує UI та не потребує kotlinx.coroutines.
+                val executor = java.util.concurrent.Executors.newFixedThreadPool(8)
+                val futures = java.util.concurrent.CopyOnWriteArrayList<java.util.concurrent.Future<CollectedEpisodes>>()
 
-                // ПАРАЛЕЛЬНЕ завантаження епізодів!
-                coroutineScope {
-                    val semaphore = Semaphore(5) // Обмеження до 5 одночасних запитів, щоб не забанити сервер
-                    val jobs = mutableListOf<Deferred<CollectedEpisodes>>()
-
+                try {
                     for (translation in translations) {
                         val translationId = translation.translation.id
 
                         for (player in translation.player) {
-                            val baseUrl =
-                                "$mainUrl/api/player/$animeId/episodes?take=100&playerId=${player.id}&translationId=$translationId"
+                            val baseUrl = "$mainUrl/api/player/$animeId/episodes?take=100&playerId=${player.id}&translationId=$translationId"
 
                             val maxSkip = if (player.episodesCount > 0) {
                                 (player.episodesCount / 100 + 10) * 100
@@ -857,50 +871,55 @@ class AnimeONProvider : MainAPI() {
                             }
 
                             for (includeAlt in listOf("true", "false")) {
-                                jobs.add(async {
-                                    semaphore.withPermit {
-                                        val collected = mutableListOf<FundubEpisode>()
-                                        val seenIDs = mutableSetOf<Int>()
+                                val tName = translation.translation.name
+                                val pName = player.name
+                                
+                                futures.add(executor.submit<CollectedEpisodes> {
+                                    val collected = mutableListOf<FundubEpisode>()
+                                    val seenIDs = mutableSetOf<Int>()
 
-                                        val epJsonMinus1 = fetchJsonOrNull("$baseUrl&skip=-1&includeAlternative=$includeAlt")
-                                        if (epJsonMinus1 != null) {
-                                            try {
-                                                val eps = AppUtils.parseJson<SafePlayerEpisodes>(epJsonMinus1).episodes
-                                                eps.filter { it.episode <= 0 && seenIDs.add(it.id) }.let { collected.addAll(it) }
-                                            } catch (e: Exception) {}
-                                        }
-
-                                        var skip = 0
-                                        while (skip <= maxSkip) {
-                                            val epJson = fetchJsonOrNull("$baseUrl&skip=$skip&includeAlternative=$includeAlt") ?: break
-                                            try {
-                                                val eps = AppUtils.parseJson<SafePlayerEpisodes>(epJson).episodes
-                                                if (eps.isNullOrEmpty()) break
-                                                collected.addAll(eps.filter { seenIDs.add(it.id) })
-                                                if (eps.size < 100) break
-                                            } catch (e: Exception) { break }
-                                            skip += 100
-                                        }
-                                        CollectedEpisodes(translation.translation.name, player.name, collected)
+                                    val epJsonMinus1 = fetchJsonOrNullSync("$baseUrl&skip=-1&includeAlternative=$includeAlt")
+                                    if (epJsonMinus1 != null) {
+                                        try {
+                                            val eps = AppUtils.parseJson<SafePlayerEpisodes>(epJsonMinus1).episodes
+                                            eps.filter { it.episode <= 0 && seenIDs.add(it.id) }.let { collected.addAll(it) }
+                                        } catch (e: Exception) {}
                                     }
+
+                                    var skip = 0
+                                    while (skip <= maxSkip) {
+                                        val epJson = fetchJsonOrNullSync("$baseUrl&skip=$skip&includeAlternative=$includeAlt") ?: break
+                                        try {
+                                            val eps = AppUtils.parseJson<SafePlayerEpisodes>(epJson).episodes
+                                            if (eps.isNullOrEmpty()) break
+                                            collected.addAll(eps.filter { seenIDs.add(it.id) })
+                                            if (eps.size < 100) break
+                                        } catch (e: Exception) { break }
+                                        skip += 100
+                                    }
+                                    CollectedEpisodes(tName, pName, collected)
                                 })
                             }
                         }
                     }
 
-                    val allResults = jobs.awaitAll()
-                    for (result in allResults) {
-                        for (ep in result.episodes) {
-                            episodeSources.getOrPut(ep.episode) { mutableListOf() }.add(
-                                EpisodeSource(
-                                    translationName = result.translationName,
-                                    playerName = result.playerName,
-                                    episodeId = ep.id,
-                                    apiPoster = ep.poster
+                    for (future in futures) {
+                        try {
+                            val result = future.get(30, java.util.concurrent.TimeUnit.SECONDS) ?: continue
+                            for (ep in result.episodes) {
+                                episodeSources.getOrPut(ep.episode) { mutableListOf() }.add(
+                                    EpisodeSource(
+                                        translationName = result.translationName,
+                                        playerName = result.playerName,
+                                        episodeId = ep.id,
+                                        apiPoster = ep.poster
+                                    )
                                 )
-                            )
-                        }
+                            }
+                        } catch (e: Exception) {}
                     }
+                } finally {
+                    executor.shutdown()
                 }
 
                 ensurePosterProxy()
@@ -923,9 +942,6 @@ class AnimeONProvider : MainAPI() {
                             if (episodeId != null) {
                                 val key = java.util.UUID.randomUUID().toString().replace("-", "")
                                 posterFetchTasks[key] = PosterFetchTask(episodeId, animeId)
-                                // Повертаємо URL на локальний проксі.
-                                // Glide почне завантажувати його, а проксі буде тримати з'єднання відкритим,
-                                // поки fetchEpisodePosterBytes не отримає реальну картинку.
                                 epPoster = "http://127.0.0.1:$posterProxyPort/poster?$key"
                             }
                         }
