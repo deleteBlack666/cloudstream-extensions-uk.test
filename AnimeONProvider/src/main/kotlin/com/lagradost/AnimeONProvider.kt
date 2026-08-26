@@ -438,33 +438,7 @@ class AnimeONProvider : MainAPI() {
         }
     }
 
-    private fun fetchJsonOrNullSync(url: String, timeoutSeconds: Int = 8): String? {
-        return try {
-            val client = okhttp3.OkHttpClient.Builder()
-                .connectTimeout(timeoutSeconds.toLong(), java.util.concurrent.TimeUnit.SECONDS)
-                .readTimeout(timeoutSeconds.toLong(), java.util.concurrent.TimeUnit.SECONDS)
-                .build()
-                
-            val request = okhttp3.Request.Builder()
-                .url(url)
-                .header("Referer", mainUrl)
-                .header("User-Agent", userAgent)
-                .get()
-                .build()
-
-            val response = client.newCall(request).execute()
-            val text = if (response.isSuccessful) response.body?.string() else null
-            response.close()
-
-            if (text != null && !text.trimStart().startsWith("{") && !text.trimStart().startsWith("[")) {
-                null
-            } else {
-                text
-            }
-        } catch (e: Exception) {
-            null
-        }
-    }
+    
 
     private suspend fun fetchJsonWithRetry(url: String, retries: Int = 3): String? {
         repeat(retries) {
