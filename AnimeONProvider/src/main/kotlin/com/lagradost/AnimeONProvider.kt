@@ -50,12 +50,12 @@ class AnimeONProvider : MainAPI() {
 
     private var posterProxyPort: Int = 0
     private val posterCache = java.util.concurrent.ConcurrentHashMap<String, ByteArray>()
-    private val posterSources = java.util.concurrent.ConcurrentHashMap<String, String>()
     private var moonCookieHeader: String? = null
 
-    private val ashdiPosterCache = java.util.concurrent.ConcurrentHashMap<String, String>()
     private val episodePosterCache = java.util.concurrent.ConcurrentHashMap<String, String>()
-    private val posterFetchExecutor = java.util.concurrent.Executors.newFixedThreadPool(16)
+    
+    private data class PosterFetchTask(val episodeId: Int, val animeId: Int)
+    private val posterFetchTasks = java.util.concurrent.ConcurrentHashMap<String, PosterFetchTask>()
 
     private val posterHttpClient = okhttp3.OkHttpClient.Builder()
         .connectTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
@@ -258,23 +258,18 @@ class AnimeONProvider : MainAPI() {
                             val line = reader.readLine() ?: return@Thread
                             
                             val key = line.substringAfter("?").substringBefore(" ").trim()
-                            val originalUrl = posterSources[key]
                             val out = client.getOutputStream()
 
-                            if (originalUrl.isNullOrEmpty()) {
-                                out.write("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray())
-                                out.flush()
-                                return@Thread
-                            }
-
-                            var body = posterCache[originalUrl]
+                            var body = posterCache[key]
 
                             if (body == null) {
-                                val fetched = fetchPosterBytes(originalUrl)
-
-                                if (fetched.isNotEmpty()) {
-                                    posterCache[originalUrl] = fetched
-                                    body = fetched
+                                val task = posterFetchTasks[key]
+                                if (task != null) {
+                                    body = fetchEpisodePosterBytes(task.episodeId)
+                                    if (body != null && body.isNotEmpty()) {
+                                        posterCache[key] = body
+                                        episodePosterCache["${task.animeId}:${task.episodeId}"] = "http://127.0.0.1:$posterProxyPort/poster?$key"
+                                    }
                                 }
                             }
 
@@ -284,10 +279,9 @@ class AnimeONProvider : MainAPI() {
                                 out.write("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray())
                             } else {
                                 val contentType = when {
-                                    originalUrl.contains(".png", true) -> "image/png"
-                                    originalUrl.contains(".jpg", true) -> "image/jpeg"
-                                    originalUrl.contains(".jpeg", true) -> "image/jpeg"
-                                    originalUrl.contains(".webp", true) -> "image/webp"
+                                    finalBody.size > 8 && finalBody[0] == 0x89.toByte() && finalBody[1] == 0x50.toByte() -> "image/png"
+                                    finalBody.size > 2 && finalBody[0] == 0xFF.toByte() && finalBody[1] == 0xD8.toByte() -> "image/jpeg"
+                                    finalBody.size > 4 && finalBody[0] == 0x52.toByte() && finalBody[1] == 0x49.toByte() -> "image/webp"
                                     else -> "application/octet-stream"
                                 }
 
@@ -527,12 +521,7 @@ class AnimeONProvider : MainAPI() {
         }
     }
 
-    private fun fetchAshdiPosterSync(videoUrl: String): String? {
-        if (ashdiPosterCache.containsKey(videoUrl)) {
-            val cached = ashdiPosterCache[videoUrl]
-            return if (cached.isNullOrEmpty()) null else cached
-        }
-
+    private fun getAshdiRawPosterUrl(videoUrl: String): String? {
         val url = if (videoUrl.contains("?")) videoUrl else "$videoUrl?player=animeon.club"
 
         val html = httpGetText(
@@ -552,16 +541,8 @@ class AnimeONProvider : MainAPI() {
             )
         )
 
-        if (html.isNullOrEmpty() || html.contains("недоступний")) {
-            ashdiPosterCache[videoUrl] = ""
-            return null
-        }
-
-        // Геоблок: якщо немає Playerjs, але є "country" — це блок-сторінка
-        if (!html.contains("new Playerjs") && html.contains("country")) {
-            ashdiPosterCache[videoUrl] = ""
-            return null
-        }
+        if (html.isNullOrEmpty() || html.contains("недоступний")) return null
+        if (!html.contains("new Playerjs") && html.contains("country")) return null
 
         val patterns = listOf(
             Regex("""poster["']?\s*:\s*["']([^"']+)["']"""),
@@ -569,29 +550,17 @@ class AnimeONProvider : MainAPI() {
             Regex("""((?:https?:)?//[^"'\s]+\.ashdi\.vip[^"'\s]*(?:screen|poster)[^"'\s]*)""")
         )
 
-        for ((i, pattern) in patterns.withIndex()) {
+        for (pattern in patterns) {
             val match = pattern.find(html)
             if (match != null) {
                 val posterUrl = match.groupValues[1]
-                val rawUrl = if (posterUrl.startsWith("http")) posterUrl else "https:$posterUrl"
-
-                ensurePosterProxy()
-
-                val key = java.util.UUID.randomUUID().toString().replace("-", "")
-                posterSources[key] = rawUrl
-
-                val proxiedUrl = "http://127.0.0.1:$posterProxyPort/poster?$key"
-
-                ashdiPosterCache[videoUrl] = proxiedUrl
-                return proxiedUrl
+                return if (posterUrl.startsWith("http")) posterUrl else "https:$posterUrl"
             }
         }
-
-        ashdiPosterCache[videoUrl] = ""
         return null
     }
 
-    private fun fetchMoonPosterSync(iframeUrl: String): String? {
+    private fun getMoonRawPosterUrl(iframeUrl: String): String? {
         if (!iframeUrl.contains("/iframe/")) return null
 
         val cleanUrl = if (iframeUrl.contains("player=")) {
@@ -613,18 +582,13 @@ class AnimeONProvider : MainAPI() {
                 "Sec-Fetch-Dest" to "document",
                 "Upgrade-Insecure-Requests" to "1"
             )
-        )
-
-        if (html.isNullOrEmpty()) {
-            return null
-        }
+        ) ?: return null
 
         val atobRegex = Regex("""atob\s*\(\s*["']([^"']+)["']\s*\)""")
         var posterUrl: String? = null
 
         for (match in atobRegex.findAll(html)) {
             val decoded = moonOuterDecode(match.groupValues[1])
-
             if (!decoded.contains("poster")) continue
 
             posterUrl = Regex("""poster\s*:\s*["'](https?://[^"']+)["']""")
@@ -639,136 +603,26 @@ class AnimeONProvider : MainAPI() {
                 .find(decoded)?.groupValues?.get(1) ?: continue
 
             val result = moonDecrypt(posterEnc, xorKey)
-
             if (result.startsWith("http")) {
                 posterUrl = result
                 break
             }
         }
 
-        if (posterUrl.isNullOrEmpty() || posterUrl.contains("mooncdn.")) {
-            return null
-        }
-
-        ensurePosterProxy()
-
-        val key = java.util.UUID.randomUUID().toString().replace("-", "")
-        posterSources[key] = posterUrl
-
-        return "http://127.0.0.1:$posterProxyPort/poster?$key"
+        if (posterUrl.isNullOrEmpty() || posterUrl.contains("mooncdn.")) return null
+        return posterUrl
     }
 
-    private fun fetchPostersParallel(animeId: Int, tasks: List<Pair<Int, Int>>): Map<Int, String> {
-        if (tasks.isEmpty()) return emptyMap()
+    private fun fetchEpisodePosterBytes(episodeId: Int): ByteArray? {
+        val videoUrl = fetchEpisodeVideoUrlSync(episodeId) ?: return null
+        
+        val rawPosterUrl = when {
+            videoUrl.contains("ashdi.vip") -> getAshdiRawPosterUrl(videoUrl)
+            videoUrl.contains("moonanime.art") -> getMoonRawPosterUrl(videoUrl)
+            else -> null
+        } ?: return null
 
-        val result = java.util.concurrent.ConcurrentHashMap<Int, String>()
-        val start = System.currentTimeMillis()
-        val deadline = 55000L
-        val latch = java.util.concurrent.CountDownLatch(tasks.size)
-
-        for ((epNum, episodeId) in tasks) {
-            posterFetchExecutor.submit {
-                try {
-                    val elapsed = System.currentTimeMillis() - start
-                    if (elapsed < deadline) {
-                        val videoUrl = fetchEpisodeVideoUrlSync(episodeId)
-
-                        if (!videoUrl.isNullOrEmpty() && System.currentTimeMillis() - start < deadline) {
-                            val poster = when {
-                                videoUrl.contains("ashdi.vip") -> fetchAshdiPosterSync(videoUrl)
-                                videoUrl.contains("moonanime.art") -> fetchMoonPosterSync(videoUrl)
-                                else -> null
-                            }
-
-                            if (!poster.isNullOrEmpty()) {
-                                result[epNum] = poster
-                                episodePosterCache["$animeId:$epNum"] = poster
-                            }
-                        }
-                    }
-                } catch (e: Exception) {
-                } finally {
-                    latch.countDown()
-                }
-            }
-        }
-
-        latch.await(deadline + 5000, java.util.concurrent.TimeUnit.MILLISECONDS)
-
-        return result
-    }
-
-    private suspend fun getMoonPoster(iframeUrl: String): String? {
-        if (!iframeUrl.contains("/iframe/")) return null
-
-        val cleanUrl = if (iframeUrl.contains("player=")) {
-            iframeUrl
-        } else {
-            "$iframeUrl${if (iframeUrl.contains("?")) "&" else "?"}player=animeon.club"
-        }
-
-        return try {
-            val html = app.get(
-                cleanUrl,
-                headers = mapOf(
-                    "User-Agent" to userAgent,
-                    "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                    "Accept-Language" to "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
-                    "Referer" to "https://animeon.club/",
-                    "X-Requested-With" to "mark.via.gp",
-                    "Sec-Fetch-Site" to "none",
-                    "Sec-Fetch-Mode" to "navigate",
-                    "Sec-Fetch-User" to "?1",
-                    "Sec-Fetch-Dest" to "document",
-                    "Upgrade-Insecure-Requests" to "1"
-                ),
-                cacheTime = 0
-            ).text
-
-            if (html.isEmpty()) {
-                null
-            } else {
-                val atobRegex = Regex("""atob\s*\(\s*["']([^"']+)["']\s*\)""")
-                var posterUrl: String? = null
-
-                for (match in atobRegex.findAll(html)) {
-                    val decoded = moonOuterDecode(match.groupValues[1])
-
-                    if (!decoded.contains("poster")) continue
-
-                    posterUrl = Regex("""poster\s*:\s*["'](https?://[^"']+)["']""")
-                        .find(decoded)?.groupValues?.get(1)
-
-                    if (posterUrl != null) break
-
-                    val xorKey = Regex("""var\s+k\s*=\s*["']([^"']+)["']""")
-                        .find(decoded)?.groupValues?.get(1) ?: continue
-
-                    val posterEnc = Regex("""poster\s*:\s*_0xd\s*\(\s*["']([^"']+)["']\s*\)""")
-                        .find(decoded)?.groupValues?.get(1) ?: continue
-
-                    val result = moonDecrypt(posterEnc, xorKey)
-
-                    if (result.startsWith("http")) {
-                        posterUrl = result
-                        break
-                    }
-                }
-
-                if (posterUrl == null) {
-                    null
-                } else {
-                    ensurePosterProxy()
-
-                    val key = java.util.UUID.randomUUID().toString().replace("-", "")
-                    posterSources[key] = posterUrl
-
-                    "http://127.0.0.1:$posterProxyPort/poster?$key"
-                }
-            }
-        } catch (e: Exception) {
-            null
-        }
+        return fetchPosterBytes(rawPosterUrl).takeIf { it.isNotEmpty() }
     }
 
     private suspend fun resolveMoonContent(contentUrl: String): String? {
@@ -1039,39 +893,29 @@ class AnimeONProvider : MainAPI() {
                     }
                 }
 
-                val directPosters = mutableMapOf<Int, String>()
-                val posterTasks = mutableListOf<Pair<Int, Int>>()
+                ensurePosterProxy()
 
                 episodeSources.keys.sorted().forEach { epNum ->
                     val sources = episodeSources[epNum] ?: return@forEach
 
-                    val direct = sources.firstNotNullOfOrNull { s ->
+                    var epPoster: String? = sources.firstNotNullOfOrNull { s ->
                         s.apiPoster?.takeIf {
                             it.isNotEmpty() && !it.contains("mooncdn.")
                         }
                     }
 
-                    if (direct != null) {
-                        directPosters[epNum] = direct
-                    } else {
+                    if (epPoster == null) {
                         val cached = episodePosterCache["$animeId:$epNum"]
-                        if (cached != null) {
-                            directPosters[epNum] = cached
+                        if (cached != null && !cached.contains("mooncdn.")) {
+                            epPoster = cached
                         } else {
-                            sources.firstOrNull()?.let { posterTasks.add(epNum to it.episodeId) }
+                            val episodeId = sources.firstOrNull()?.episodeId
+                            if (episodeId != null) {
+                                val key = java.util.UUID.randomUUID().toString().replace("-", "")
+                                posterFetchTasks[key] = PosterFetchTask(episodeId, animeId)
+                                epPoster = "http://127.0.0.1:$posterProxyPort/poster?$key"
+                            }
                         }
-                    }
-                }
-
-                val fetchedPosters = fetchPostersParallel(animeId, posterTasks)
-
-                episodeSources.keys.sorted().forEach { epNum ->
-                    val sources = episodeSources[epNum] ?: return@forEach
-
-                    var epPoster: String? = directPosters[epNum] ?: fetchedPosters[epNum]
-
-                    if (epPoster != null && epPoster.contains("mooncdn.")) {
-                        epPoster = null
                     }
 
                     val dataJson = org.json.JSONArray().also { arr ->
