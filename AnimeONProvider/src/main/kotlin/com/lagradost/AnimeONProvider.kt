@@ -60,8 +60,8 @@ class AnimeONProvider : MainAPI() {
     private data class CollectedEpisodes(val translationName: String, val playerName: String, val episodes: List<FundubEpisode>)
 
     private val posterHttpClient = okhttp3.OkHttpClient.Builder()
-        .connectTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
-        .readTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
+        .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+        .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
         .addInterceptor { chain ->
             val request = chain.request().newBuilder()
                 .removeHeader("Accept-Encoding")
@@ -71,8 +71,8 @@ class AnimeONProvider : MainAPI() {
         .build()
 
     private val htmlHttpClient = okhttp3.OkHttpClient.Builder()
-        .connectTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
-        .readTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
+        .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+        .readTimeout(15, java.util.concurrent.TimeUnit.SECONDS) // Зменшено таймаут, щоб не висіти на повільних API
         .build()
 
     private fun currentSeasonLabel(): String {
@@ -853,7 +853,6 @@ class AnimeONProvider : MainAPI() {
                 val episodeSources = java.util.concurrent.ConcurrentHashMap<Int, MutableList<EpisodeSource>>()
 
                 // Паралельне завантаження списків епізодів через Java ExecutorService.
-                // Це не блокує UI та не потребує kotlinx.coroutines.
                 val executor = java.util.concurrent.Executors.newFixedThreadPool(8)
                 val futures = java.util.concurrent.CopyOnWriteArrayList<java.util.concurrent.Future<CollectedEpisodes>>()
 
@@ -862,13 +861,8 @@ class AnimeONProvider : MainAPI() {
                         val translationId = translation.translation.id
 
                         for (player in translation.player) {
-                            val baseUrl = "$mainUrl/api/player/$animeId/episodes?take=100&playerId=${player.id}&translationId=$translationId"
-
-                            val maxSkip = if (player.episodesCount > 0) {
-                                (player.episodesCount / 100 + 10) * 100
-                            } else {
-                                20000
-                            }
+                            // ЗБІЛЬШЕНО TAKE ДО 1000! Це ключова оптимізація.
+                            val baseUrl = "$mainUrl/api/player/$animeId/episodes?take=1000&playerId=${player.id}&translationId=$translationId"
 
                             for (includeAlt in listOf("true", "false")) {
                                 val tName = translation.translation.name
@@ -887,15 +881,16 @@ class AnimeONProvider : MainAPI() {
                                     }
 
                                     var skip = 0
-                                    while (skip <= maxSkip) {
+                                    while (true) {
                                         val epJson = fetchJsonOrNullSync("$baseUrl&skip=$skip&includeAlternative=$includeAlt") ?: break
                                         try {
                                             val eps = AppUtils.parseJson<SafePlayerEpisodes>(epJson).episodes
                                             if (eps.isNullOrEmpty()) break
                                             collected.addAll(eps.filter { seenIDs.add(it.id) })
-                                            if (eps.size < 100) break
+                                            // Якщо отримали менше 1000, значить це остання сторінка - виходимо з циклу.
+                                            if (eps.size < 1000) break 
                                         } catch (e: Exception) { break }
-                                        skip += 100
+                                        skip += 1000
                                     }
                                     CollectedEpisodes(tName, pName, collected)
                                 })
@@ -905,7 +900,7 @@ class AnimeONProvider : MainAPI() {
 
                     for (future in futures) {
                         try {
-                            val result = future.get(30, java.util.concurrent.TimeUnit.SECONDS) ?: continue
+                            val result = future.get(15, java.util.concurrent.TimeUnit.SECONDS) ?: continue
                             for (ep in result.episodes) {
                                 episodeSources.getOrPut(ep.episode) { mutableListOf() }.add(
                                     EpisodeSource(
@@ -1152,14 +1147,8 @@ class AnimeONProvider : MainAPI() {
                     val collected = mutableListOf<FundubEpisode>()
                     val seenIDs = mutableSetOf<Int>()
 
-                    val baseUrl =
-                        "$mainUrl/api/player/$animeId/episodes?take=100&playerId=${player.id}&translationId=$translationId"
-
-                    val maxSkip = if (player.episodesCount > 0) {
-                        (player.episodesCount / 100 + 10) * 100
-                    } else {
-                        20000
-                    }
+                    // Тут теж оновлюємо take для фільмів
+                    val baseUrl = "$mainUrl/api/player/$animeId/episodes?take=1000&playerId=${player.id}&translationId=$translationId"
 
                     for (includeAlt in listOf("true", "false")) {
                         val epJsonMinus1 = fetchJsonWithRetry("$baseUrl&skip=-1&includeAlternative=$includeAlt")
@@ -1178,7 +1167,7 @@ class AnimeONProvider : MainAPI() {
 
                         var skip = 0
 
-                        while (skip <= maxSkip) {
+                        while (true) {
                             val epJson = fetchJsonWithRetry("$baseUrl&skip=$skip&includeAlternative=$includeAlt") ?: break
 
                             val eps = try {
@@ -1192,9 +1181,9 @@ class AnimeONProvider : MainAPI() {
                             val newEps = eps.filter { seenIDs.add(it.id) }
                             collected.addAll(newEps)
 
-                            if (eps.size < 100) break
+                            if (eps.size < 1000) break
 
-                            skip += 100
+                            skip += 1000
                         }
                     }
 
