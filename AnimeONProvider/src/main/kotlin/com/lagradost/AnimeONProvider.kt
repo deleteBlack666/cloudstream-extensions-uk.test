@@ -438,7 +438,7 @@ class AnimeONProvider : MainAPI() {
         }
     }
 
-    private fun fetchJsonOrNullSync(url: String, timeoutSeconds: Int = 8): String? {
+    private fun fetchJsonOrNullSync(url: String): String? {
         return try {
             val request = okhttp3.Request.Builder()
                 .url(url)
@@ -783,7 +783,7 @@ class AnimeONProvider : MainAPI() {
 
     private suspend fun searchById(id: Int): SearchResponse? {
         val slug = resolveAnimeSlug(id)
-        val realUrl = if (slug.toIntOrNull() != null) "$apiUrl/$slug" else "$apiUrl/$slug"
+        val realUrl = "$apiUrl/$slug"
         val jsonText = fetchJsonOrNull(realUrl) ?: return null
 
         val anime = try {
@@ -802,57 +802,12 @@ class AnimeONProvider : MainAPI() {
         val animeId = url.substringAfterLast("/").substringBefore("-").toIntOrNull()
             ?: throw Exception("Invalid anime ID in URL: $url")
 
-        val executor = java.util.concurrent.Executors.newFixedThreadPool(4)
+        // Отримуємо slug через fetchJsonOrNull (швидший для простих запитів)
+        val slug = resolveAnimeSlug(animeId)
+        val realApiUrl = "$apiUrl/$slug"
         
-        val animeInfoFuture = executor.submit(java.util.concurrent.Callable<Pair<String, String?>> {
-            val initial = fetchJsonOrNullSync("$apiUrl/$animeId", timeoutSeconds = 8)
-            val slug = if (initial != null) {
-                try {
-                    val redirect = AppUtils.parseJson<RedirectResponse>(initial)
-                    if (redirect?.moved == true && !redirect.slug.isNullOrEmpty()) redirect.slug!! else animeId.toString()
-                } catch (e: Exception) { animeId.toString() }
-            } else animeId.toString()
-            
-            val animeInfoJson = fetchJsonOrNullSync("$apiUrl/$slug", timeoutSeconds = 8)
-            Pair(slug, animeInfoJson)
-        })
-        
-        val translationsFuture = executor.submit(java.util.concurrent.Callable<String?> {
-            fetchJsonOrNullSync("$mainUrl/api/player/$animeId/translations", timeoutSeconds = 8)
-        })
-        
-        val franchiseFuture = executor.submit(java.util.concurrent.Callable<List<SearchResponse>> {
-            try {
-                val json = fetchJsonOrNullSync("$mainUrl/api/franchise/full/$animeId", timeoutSeconds = 10)
-                if (json != null) {
-                    val items = AppUtils.parseJson<List<FranchiseItem>>(json)
-                    items.filter { it.id != animeId }.map { item ->
-                        newAnimeSearchResponse(item.titleUa, "anime/${item.id}", TvType.Anime) {
-                            this.posterUrl = item.image?.preview?.let { posterApi.format(it) }
-                        }
-                    }
-                } else emptyList()
-            } catch (e: Exception) { emptyList() }
-        })
-
-        val (slug, jsonText) = try { 
-            animeInfoFuture.get(10, java.util.concurrent.TimeUnit.SECONDS) 
-        } catch (e: Exception) { 
-            Pair(animeId.toString(), null as String?) 
-        }
-        
-        val translationsJson: String? = try { 
-            translationsFuture.get(10, java.util.concurrent.TimeUnit.SECONDS) 
-        } catch (e: Exception) { null }
-        
-        val franchise: List<SearchResponse> = try { 
-            franchiseFuture.get(12, java.util.concurrent.TimeUnit.SECONDS) 
-        } catch (e: Exception) { emptyList() }
-
-        if (jsonText == null) {
-            executor.shutdown()
-            throw Exception("Failed to load anime $animeId")
-        }
+        val jsonText = fetchJsonOrNull(realApiUrl)
+            ?: throw Exception("Failed to load anime $animeId")
 
         val animeJSON = AppUtils.parseJson<SafeAnimeInfoModel>(jsonText)
             ?: throw Exception("Failed to parse anime $animeId")
@@ -875,15 +830,18 @@ class AnimeONProvider : MainAPI() {
             }
         }
 
+        // Використовуємо slug для episodes-info (фікс таймаутів)
         val episodeInfoMap = fetchEpisodeInfoMap(slug)
 
         val episodes = mutableListOf<com.lagradost.cloudstream3.Episode>()
+        val translationsJson = fetchJsonOrNull("$mainUrl/api/player/$animeId/translations")
 
         if (translationsJson != null) {
             try {
                 val translations = AppUtils.parseJson<SafeTranslationsResponse>(translationsJson).translations
                 val episodeSources = java.util.concurrent.ConcurrentHashMap<Int, MutableList<EpisodeSource>>()
 
+                // Паралельне завантаження тільки для епізодів
                 val episodeExecutor = java.util.concurrent.Executors.newFixedThreadPool(12)
                 val futures = java.util.concurrent.CopyOnWriteArrayList<java.util.concurrent.Future<CollectedEpisodes>>()
 
@@ -902,7 +860,7 @@ class AnimeONProvider : MainAPI() {
                                     val collected = mutableListOf<FundubEpisode>()
                                     val seenIDs = mutableSetOf<Int>()
 
-                                    val epJsonMinus1 = fetchJsonOrNullSync("$baseUrl&skip=-1&includeAlternative=$includeAlt", timeoutSeconds = 8)
+                                    val epJsonMinus1 = fetchJsonOrNullSync("$baseUrl&skip=-1&includeAlternative=$includeAlt")
                                     if (epJsonMinus1 != null) {
                                         try {
                                             val eps = AppUtils.parseJson<SafePlayerEpisodes>(epJsonMinus1).episodes
@@ -912,7 +870,7 @@ class AnimeONProvider : MainAPI() {
 
                                     var skip = 0
                                     while (true) {
-                                        val epJson = fetchJsonOrNullSync("$baseUrl&skip=$skip&includeAlternative=$includeAlt", timeoutSeconds = 8) ?: break
+                                        val epJson = fetchJsonOrNullSync("$baseUrl&skip=$skip&includeAlternative=$includeAlt") ?: break
                                         try {
                                             val eps = AppUtils.parseJson<SafePlayerEpisodes>(epJson).episodes
                                             if (eps.isNullOrEmpty()) break
@@ -993,7 +951,7 @@ class AnimeONProvider : MainAPI() {
             }
         }
 
-        executor.shutdown()
+        val franchise = buildFranchise(animeId)
 
         return if (tvType == TvType.Anime || tvType == TvType.OVA) {
             newAnimeLoadResponse(animeJSON.titleUa, "$mainUrl/anime/$animeId", tvType) {
