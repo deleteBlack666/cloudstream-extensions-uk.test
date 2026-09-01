@@ -10,23 +10,12 @@ import com.lagradost.models.*
 
 class AnimeONProvider : MainAPI() {
 
-    companion object {
-        private const val TAG = "AnimeOn"
-        private const val CACHE_TTL_MS = 5 * 60 * 1000L
-    }
-
     override var mainUrl = "https://animeon.club"
     override var name = "AnimeON"
     override val hasMainPage = true
     override var lang = "uk"
     override val hasQuickSearch = true
     override val hasDownloadSupport = true
-
-    private data class LoadCacheEntry(
-        val timestamp: Long,
-        val loadResponse: LoadResponse
-    )
-    private val loadCache = java.util.concurrent.ConcurrentHashMap<Int, LoadCacheEntry>()
 
     override fun getVideoInterceptor(extractorLink: ExtractorLink): okhttp3.Interceptor {
         return okhttp3.Interceptor { chain ->
@@ -795,7 +784,8 @@ class AnimeONProvider : MainAPI() {
             if (animeById != null) return listOf(animeById)
         }
 
-        val url = "$searchApi$query"
+        val encodedQuery = query.replace(" ", "+")
+        val url = "$searchApi$encodedQuery"
         val jsonText = fetchJsonOrNull(url) ?: return emptyList()
 
         return try {
@@ -832,16 +822,6 @@ class AnimeONProvider : MainAPI() {
     override suspend fun load(url: String): LoadResponse {
         val animeId = url.substringAfterLast("/").substringBefore("-").toIntOrNull()
             ?: throw Exception("Invalid anime ID in URL: $url")
-
-        android.util.Log.d(TAG, "Loading anime ID: $animeId")
-
-        val cached = loadCache[animeId]
-        if (cached != null && System.currentTimeMillis() - cached.timestamp < CACHE_TTL_MS) {
-            android.util.Log.d(TAG, "Cache HIT for animeId=$animeId")
-            return cached.loadResponse
-        }
-
-        val startTime = System.currentTimeMillis()
 
         val slug = resolveAnimeSlug(animeId)
         val realApiUrl = "$apiUrl/$slug"
@@ -880,10 +860,7 @@ class AnimeONProvider : MainAPI() {
                 val translations = AppUtils.parseJson<SafeTranslationsResponse>(translationsJson).translations
                 val episodeSources = java.util.concurrent.ConcurrentHashMap<Int, MutableList<EpisodeSource>>()
 
-                val totalTasks = translations.sumOf { it.player.size } * 2
-                android.util.Log.d(TAG, "animeId=$animeId translations=${translations.size} totalTasks=$totalTasks")
-
-                val poolSize = totalTasks.coerceIn(4, 24)
+                val poolSize = (translations.sumOf { it.player.size } * 2).coerceIn(4, 24)
                 val episodeExecutor = java.util.concurrent.Executors.newFixedThreadPool(poolSize)
                 val futures = java.util.concurrent.CopyOnWriteArrayList<java.util.concurrent.Future<CollectedEpisodes>>()
 
@@ -988,9 +965,7 @@ class AnimeONProvider : MainAPI() {
 
         val franchise = buildFranchise(animeId)
 
-        android.util.Log.d(TAG, "Total load time: ${System.currentTimeMillis() - startTime}ms, episodes: ${episodes.size}")
-
-        val result = if (tvType == TvType.Anime || tvType == TvType.OVA) {
+        return if (tvType == TvType.Anime || tvType == TvType.OVA) {
             newAnimeLoadResponse(animeJSON.titleUa, "$mainUrl/anime/$animeId", tvType) {
                 this.posterUrl = posterUrl
                 this.engName = animeJSON.titleEn
@@ -1033,10 +1008,6 @@ class AnimeONProvider : MainAPI() {
                 this.recommendations = franchise
             }
         }
-
-        loadCache[animeId] = LoadCacheEntry(System.currentTimeMillis(), result)
-
-        return result
     }
 
     override suspend fun loadLinks(
