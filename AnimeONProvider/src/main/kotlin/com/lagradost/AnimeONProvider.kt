@@ -1,5 +1,6 @@
 package com.lagradost
 
+import android.util.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addMalId
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
@@ -9,6 +10,10 @@ import com.lagradost.cloudstream3.utils.M3u8Helper
 import com.lagradost.models.*
 
 class AnimeONProvider : MainAPI() {
+
+    companion object {
+        private const val TAG = "AnimeOn"
+    }
 
     override var mainUrl = "https://animeon.club"
     override var name = "AnimeON"
@@ -58,10 +63,6 @@ class AnimeONProvider : MainAPI() {
     private val posterFetchTasks = java.util.concurrent.ConcurrentHashMap<String, PosterFetchTask>()
     
     private data class CollectedEpisodes(val translationName: String, val playerName: String, val episodes: List<FundubEpisode>)
-
-    private data class CacheEntry(val timestamp: Long, val episodes: List<com.lagradost.cloudstream3.Episode>)
-    private val loadCache = java.util.concurrent.ConcurrentHashMap<Int, CacheEntry>()
-    private val CACHE_TTL_MS = 10 * 60 * 1000L
 
     private val posterHttpClient = okhttp3.OkHttpClient.Builder()
         .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
@@ -806,6 +807,9 @@ class AnimeONProvider : MainAPI() {
         val animeId = url.substringAfterLast("/").substringBefore("-").toIntOrNull()
             ?: throw Exception("Invalid anime ID in URL: $url")
 
+        android.util.Log.d(TAG, "Loading anime ID: $animeId")
+        val startTime = System.currentTimeMillis()
+
         val slug = resolveAnimeSlug(animeId)
         val realApiUrl = "$apiUrl/$slug"
         
@@ -838,22 +842,15 @@ class AnimeONProvider : MainAPI() {
         val episodes = mutableListOf<com.lagradost.cloudstream3.Episode>()
         val translationsJson = fetchJsonOrNull("$mainUrl/api/player/$animeId/translations")
 
-        val cached = loadCache[animeId]
-        val useCache = cached != null && (System.currentTimeMillis() - cached.timestamp) < CACHE_TTL_MS
-
-        if (useCache) {
-            episodes.addAll(cached!!.episodes)
-            android.util.Log.d("AnimeON", "Cache HIT for animeId=$animeId, ${episodes.size} episodes")
-        } else if (translationsJson != null) {
+        if (translationsJson != null) {
             try {
                 val translations = AppUtils.parseJson<SafeTranslationsResponse>(translationsJson).translations
                 val episodeSources = java.util.concurrent.ConcurrentHashMap<Int, MutableList<EpisodeSource>>()
 
                 val totalTasks = translations.sumOf { it.player.size } * 2
-                android.util.Log.d("AnimeON", "animeId=$animeId translations=${translations.size} totalTasks=$totalTasks")
+                android.util.Log.d(TAG, "animeId=$animeId translations=${translations.size} totalTasks=$totalTasks")
 
-                val poolSize = totalTasks.coerceIn(4, 48)
-                val episodeExecutor = java.util.concurrent.Executors.newFixedThreadPool(poolSize)
+                val episodeExecutor = java.util.concurrent.Executors.newFixedThreadPool(12)
                 val futures = java.util.concurrent.CopyOnWriteArrayList<java.util.concurrent.Future<CollectedEpisodes>>()
 
                 try {
@@ -898,7 +895,7 @@ class AnimeONProvider : MainAPI() {
 
                     for (future in futures) {
                         try {
-                            val result = future.get(25, java.util.concurrent.TimeUnit.SECONDS) ?: continue
+                            val result = future.get(15, java.util.concurrent.TimeUnit.SECONDS) ?: continue
                             for (ep in result.episodes) {
                                 episodeSources.getOrPut(ep.episode) { mutableListOf() }.add(
                                     EpisodeSource(
@@ -925,14 +922,11 @@ class AnimeONProvider : MainAPI() {
                     }
 
                     if (epPoster == null) {
-                        val cachedPoster = episodePosterCache["$animeId:$epNum"]
-                        if (cachedPoster != null && !cachedPoster.contains("mooncdn.")) {
-                            epPoster = cachedPoster
+                        val cached = episodePosterCache["$animeId:$epNum"]
+                        if (cached != null && !cached.contains("mooncdn.")) {
+                            epPoster = cached
                         } else {
-                            val ashdiSource = sources.firstOrNull { 
-                                it.playerName.contains("Ashdi", ignoreCase = true) 
-                            }
-                            val episodeId = (ashdiSource ?: sources.firstOrNull())?.episodeId
+                            val episodeId = sources.firstOrNull()?.episodeId
                             if (episodeId != null) {
                                 val key = java.util.UUID.randomUUID().toString().replace("-", "")
                                 posterFetchTasks[key] = PosterFetchTask(episodeId, animeId)
@@ -961,15 +955,13 @@ class AnimeONProvider : MainAPI() {
                         }
                     )
                 }
-
-                if (episodes.isNotEmpty()) {
-                    loadCache[animeId] = CacheEntry(System.currentTimeMillis(), episodes.toList())
-                }
             } catch (e: Exception) {
             }
         }
 
         val franchise = buildFranchise(animeId)
+
+        android.util.Log.d(TAG, "Total load time: ${System.currentTimeMillis() - startTime}ms, episodes: ${episodes.size}")
 
         return if (tvType == TvType.Anime || tvType == TvType.OVA) {
             newAnimeLoadResponse(animeJSON.titleUa, "$mainUrl/anime/$animeId", tvType) {
