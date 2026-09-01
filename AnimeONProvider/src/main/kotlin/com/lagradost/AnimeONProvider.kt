@@ -1,6 +1,5 @@
 package com.lagradost
 
-import android.util.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addMalId
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
@@ -13,6 +12,8 @@ class AnimeONProvider : MainAPI() {
 
     companion object {
         private const val TAG = "AnimeOn"
+        private const val MAX_POSTER_TASKS = 50
+        private const val CACHE_TTL_MS = 5 * 60 * 1000L
     }
 
     override var mainUrl = "https://animeon.club"
@@ -21,6 +22,12 @@ class AnimeONProvider : MainAPI() {
     override var lang = "uk"
     override val hasQuickSearch = true
     override val hasDownloadSupport = true
+
+    private data class LoadCacheEntry(
+        val timestamp: Long,
+        val loadResponse: LoadResponse
+    )
+    private val loadCache = java.util.concurrent.ConcurrentHashMap<Int, LoadCacheEntry>()
 
     override fun getVideoInterceptor(extractorLink: ExtractorLink): okhttp3.Interceptor {
         return okhttp3.Interceptor { chain ->
@@ -244,6 +251,26 @@ class AnimeONProvider : MainAPI() {
             headers = link.headers,
             extractorData = link.extractorData
         )
+    }
+
+    private fun escapeJson(str: String): String {
+        return str.replace("\\", "\\\\")
+                  .replace("\"", "\\\"")
+                  .replace("\n", "\\n")
+                  .replace("\r", "\\r")
+                  .replace("\t", "\\t")
+    }
+
+    private fun buildEpisodeDataJson(sources: List<EpisodeSource>): String {
+        val sb = StringBuilder("[")
+        sources.forEachIndexed { index, s ->
+            if (index > 0) sb.append(",")
+            sb.append("{\"translationName\":\"${escapeJson(s.translationName)}\",")
+            sb.append("\"playerName\":\"${escapeJson(s.playerName)}\",")
+            sb.append("\"episodeId\":${s.episodeId}}")
+        }
+        sb.append("]")
+        return sb.toString()
     }
 
     @Synchronized
@@ -808,6 +835,13 @@ class AnimeONProvider : MainAPI() {
             ?: throw Exception("Invalid anime ID in URL: $url")
 
         android.util.Log.d(TAG, "Loading anime ID: $animeId")
+
+        val cached = loadCache[animeId]
+        if (cached != null && System.currentTimeMillis() - cached.timestamp < CACHE_TTL_MS) {
+            android.util.Log.d(TAG, "Cache HIT for animeId=$animeId")
+            return cached.loadResponse
+        }
+
         val startTime = System.currentTimeMillis()
 
         val slug = resolveAnimeSlug(animeId)
@@ -850,7 +884,8 @@ class AnimeONProvider : MainAPI() {
                 val totalTasks = translations.sumOf { it.player.size } * 2
                 android.util.Log.d(TAG, "animeId=$animeId translations=${translations.size} totalTasks=$totalTasks")
 
-                val episodeExecutor = java.util.concurrent.Executors.newFixedThreadPool(12)
+                val poolSize = totalTasks.coerceIn(4, 24)
+                val episodeExecutor = java.util.concurrent.Executors.newFixedThreadPool(poolSize)
                 val futures = java.util.concurrent.CopyOnWriteArrayList<java.util.concurrent.Future<CollectedEpisodes>>()
 
                 try {
@@ -897,7 +932,8 @@ class AnimeONProvider : MainAPI() {
                         try {
                             val result = future.get(15, java.util.concurrent.TimeUnit.SECONDS) ?: continue
                             for (ep in result.episodes) {
-                                episodeSources.getOrPut(ep.episode) { mutableListOf() }.add(
+                                val sources = episodeSources.getOrPut(ep.episode) { mutableListOf() }
+                                sources.add(
                                     EpisodeSource(
                                         translationName = result.translationName,
                                         playerName = result.playerName,
@@ -914,7 +950,9 @@ class AnimeONProvider : MainAPI() {
 
                 ensurePosterProxy()
 
-                episodeSources.keys.sorted().forEach { epNum ->
+                var posterTaskCount = 0
+
+                episodeSources.keys.sorted().forEachIndexed { index, epNum ->
                     val sources = episodeSources[epNum] ?: return@forEach
 
                     var epPoster: String? = sources.firstNotNullOfOrNull { s ->
@@ -922,28 +960,21 @@ class AnimeONProvider : MainAPI() {
                     }
 
                     if (epPoster == null) {
-                        val cached = episodePosterCache["$animeId:$epNum"]
-                        if (cached != null && !cached.contains("mooncdn.")) {
-                            epPoster = cached
-                        } else {
+                        val cachedPoster = episodePosterCache["$animeId:$epNum"]
+                        if (cachedPoster != null && !cachedPoster.contains("mooncdn.")) {
+                            epPoster = cachedPoster
+                        } else if (posterTaskCount < MAX_POSTER_TASKS) {
                             val episodeId = sources.firstOrNull()?.episodeId
                             if (episodeId != null) {
                                 val key = java.util.UUID.randomUUID().toString().replace("-", "")
                                 posterFetchTasks[key] = PosterFetchTask(episodeId, animeId)
                                 epPoster = "http://127.0.0.1:$posterProxyPort/poster?$key"
+                                posterTaskCount++
                             }
                         }
                     }
 
-                    val dataJson = org.json.JSONArray().also { arr ->
-                        sources.forEach { s ->
-                            arr.put(org.json.JSONObject().apply {
-                                put("translationName", s.translationName)
-                                put("playerName", s.playerName)
-                                put("episodeId", s.episodeId)
-                            })
-                        }
-                    }.toString()
+                    val dataJson = buildEpisodeDataJson(sources)
 
                     val episodeName = episodeInfoMap[epNum]?.takeIf { it.isNotBlank() }
 
@@ -963,7 +994,7 @@ class AnimeONProvider : MainAPI() {
 
         android.util.Log.d(TAG, "Total load time: ${System.currentTimeMillis() - startTime}ms, episodes: ${episodes.size}")
 
-        return if (tvType == TvType.Anime || tvType == TvType.OVA) {
+        val result = if (tvType == TvType.Anime || tvType == TvType.OVA) {
             newAnimeLoadResponse(animeJSON.titleUa, "$mainUrl/anime/$animeId", tvType) {
                 this.posterUrl = posterUrl
                 this.engName = animeJSON.titleEn
@@ -1006,6 +1037,10 @@ class AnimeONProvider : MainAPI() {
                 this.recommendations = franchise
             }
         }
+
+        loadCache[animeId] = LoadCacheEntry(System.currentTimeMillis(), result)
+
+        return result
     }
 
     override suspend fun loadLinks(
