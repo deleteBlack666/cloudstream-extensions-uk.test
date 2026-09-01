@@ -1,6 +1,5 @@
 package com.lagradost
 
-import android.util.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addMalId
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
@@ -954,7 +953,7 @@ class AnimeONProvider : MainAPI() {
                 var posterTaskCount = 0
 
                 episodeSources.keys.sorted().forEachIndexed { index, epNum ->
-                    val sources = episodeSources[epNum] ?: return@forEach
+                    val sources = episodeSources[epNum] ?: return@forEachIndexed
 
                     var epPoster: String? = sources.firstNotNullOfOrNull { s ->
                         s.apiPoster?.takeIf { it.isNotEmpty() && !it.contains("mooncdn.") }
