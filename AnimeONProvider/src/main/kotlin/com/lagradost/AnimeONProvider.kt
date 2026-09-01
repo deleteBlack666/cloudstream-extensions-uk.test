@@ -12,7 +12,6 @@ class AnimeONProvider : MainAPI() {
 
     companion object {
         private const val TAG = "AnimeOn"
-        private const val MAX_POSTER_TASKS = 50
         private const val CACHE_TTL_MS = 5 * 60 * 1000L
     }
 
@@ -950,10 +949,8 @@ class AnimeONProvider : MainAPI() {
 
                 ensurePosterProxy()
 
-                var posterTaskCount = 0
-
-                episodeSources.keys.sorted().forEachIndexed { index, epNum ->
-                    val sources = episodeSources[epNum] ?: return@forEachIndexed
+                episodeSources.keys.sorted().forEach { epNum ->
+                    val sources = episodeSources[epNum] ?: return@forEach
 
                     var epPoster: String? = sources.firstNotNullOfOrNull { s ->
                         s.apiPoster?.takeIf { it.isNotEmpty() && !it.contains("mooncdn.") }
@@ -963,13 +960,12 @@ class AnimeONProvider : MainAPI() {
                         val cachedPoster = episodePosterCache["$animeId:$epNum"]
                         if (cachedPoster != null && !cachedPoster.contains("mooncdn.")) {
                             epPoster = cachedPoster
-                        } else if (posterTaskCount < MAX_POSTER_TASKS) {
+                        } else {
                             val episodeId = sources.firstOrNull()?.episodeId
                             if (episodeId != null) {
                                 val key = java.util.UUID.randomUUID().toString().replace("-", "")
                                 posterFetchTasks[key] = PosterFetchTask(episodeId, animeId)
                                 epPoster = "http://127.0.0.1:$posterProxyPort/poster?$key"
-                                posterTaskCount++
                             }
                         }
                     }
