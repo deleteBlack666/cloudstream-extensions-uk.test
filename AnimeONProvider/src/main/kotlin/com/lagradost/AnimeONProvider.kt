@@ -784,8 +784,8 @@ class AnimeONProvider : MainAPI() {
             if (animeById != null) return listOf(animeById)
         }
 
-        val encodedQuery = query.replace(" ", "+")
-        val url = "$searchApi$encodedQuery"
+        // FIX 1: передаємо query напряму, без ручного replace(" ", "+")
+        val url = "$searchApi$query"
         val jsonText = fetchJsonOrNull(url) ?: return emptyList()
 
         return try {
@@ -926,6 +926,11 @@ class AnimeONProvider : MainAPI() {
 
                 ensurePosterProxy()
 
+                // FIX 2: пул для паралельного prefetch постерів епізодів
+                val posterPrefetchExecutor = java.util.concurrent.Executors.newFixedThreadPool(
+                    (episodeSources.size / 2).coerceIn(4, 16)
+                )
+
                 episodeSources.keys.sorted().forEach { epNum ->
                     val sources = episodeSources[epNum] ?: return@forEach
 
@@ -943,6 +948,22 @@ class AnimeONProvider : MainAPI() {
                                 val key = java.util.UUID.randomUUID().toString().replace("-", "")
                                 posterFetchTasks[key] = PosterFetchTask(episodeId, animeId)
                                 epPoster = "http://127.0.0.1:$posterProxyPort/poster?$key"
+
+                                // Запускаємо prefetch у фоні одразу —
+                                // щоб до моменту коли CS3 запросить картинку вона вже була в кеші
+                                val prefetchKey = key
+                                val prefetchEpisodeId = episodeId
+                                val prefetchAnimeId = animeId
+                                posterPrefetchExecutor.submit {
+                                    if (!posterCache.containsKey(prefetchKey)) {
+                                        val bytes = fetchEpisodePosterBytes(prefetchEpisodeId)
+                                        if (bytes != null && bytes.isNotEmpty()) {
+                                            posterCache[prefetchKey] = bytes
+                                            episodePosterCache["$prefetchAnimeId:$prefetchEpisodeId"] =
+                                                "http://127.0.0.1:$posterProxyPort/poster?$prefetchKey"
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -959,6 +980,10 @@ class AnimeONProvider : MainAPI() {
                         }
                     )
                 }
+
+                // Не чекаємо — prefetch продовжується у фоні після повернення load()
+                posterPrefetchExecutor.shutdown()
+
             } catch (e: Exception) {
             }
         }
