@@ -1,6 +1,5 @@
 package com.lagradost
 
-import android.util.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addMalId
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
@@ -10,8 +9,6 @@ import com.lagradost.cloudstream3.utils.M3u8Helper
 import com.lagradost.models.*
 
 class AnimeONProvider : MainAPI() {
-
-    private val TAG = "animeon"
 
     override var mainUrl = "https://animeon.club"
     override var name = "AnimeON"
@@ -337,8 +334,6 @@ class AnimeONProvider : MainAPI() {
         val serverSocket = java.net.ServerSocket(0)
         posterProxyPort = serverSocket.localPort
 
-        Log.d(TAG, "ensurePosterProxy: started on port $posterProxyPort")
-
         Thread {
             while (!serverSocket.isClosed) {
                 try {
@@ -483,7 +478,6 @@ class AnimeONProvider : MainAPI() {
             val response = posterHttpClient.newCall(requestBuilder.build()).execute()
 
             if (!response.isSuccessful) {
-                Log.w(TAG, "fetchPosterBytes: HTTP ${response.code} for $originalUrl")
                 response.close()
                 return ByteArray(0)
             }
@@ -491,10 +485,8 @@ class AnimeONProvider : MainAPI() {
             val bytes = response.body?.bytes() ?: ByteArray(0)
             response.close()
 
-            Log.d(TAG, "fetchPosterBytes: got ${bytes.size} bytes from $originalUrl")
             bytes
         } catch (e: Exception) {
-            Log.e(TAG, "fetchPosterBytes: error for $originalUrl", e)
             ByteArray(0)
         }
     }
@@ -517,7 +509,6 @@ class AnimeONProvider : MainAPI() {
 
     private suspend fun fetchJsonOrNull(url: String): String? {
         return try {
-            Log.d(TAG, "fetchJsonOrNull: GET $url")
             val response = app.get(
                 url,
                 headers = mapOf(
@@ -528,13 +519,11 @@ class AnimeONProvider : MainAPI() {
             ).text
 
             if (!response.trimStart().startsWith("{") && !response.trimStart().startsWith("[")) {
-                Log.w(TAG, "fetchJsonOrNull: non-json response from $url (first 100 chars): ${response.take(100)}")
                 null
             } else {
                 response
             }
         } catch (e: Exception) {
-            Log.e(TAG, "fetchJsonOrNull: error for $url", e)
             null
         }
     }
@@ -758,7 +747,6 @@ class AnimeONProvider : MainAPI() {
         return try {
             AppUtils.parseJson<FenixMediaAccess>(match.groupValues[1])
         } catch (e: Exception) {
-            Log.e(TAG, "extractFenixMediaAccess: parse error", e)
             null
         }
     }
@@ -771,8 +759,7 @@ class AnimeONProvider : MainAPI() {
             val originUri = java.net.URI(access.origin)
             if (targetUri.host != originUri.host) return url
             val sep = if (url.contains("?")) "&" else "?"
-            val result = "$url${sep}token=${access.token}"
-            result
+            "$url${sep}token=${access.token}"
         } catch (e: Exception) {
             url
         }
@@ -881,11 +868,10 @@ class AnimeONProvider : MainAPI() {
 
         val mediaAccess = extractFenixMediaAccess(html)
 
-        val apiBase = origin
         val apiPath = if (isSignedFenixCode(code))
-            "$apiBase/api/playlist-code/$code"
+            "$origin/api/playlist-code/$code"
         else
-            "$apiBase/api/playlist/$code"
+            "$origin/api/playlist/$code"
 
         val json = httpGetText(
             apiPath,
@@ -925,8 +911,6 @@ class AnimeONProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit,
         preferredTrack: String? = null
     ) {
-        Log.d(TAG, "processFenixEpisodeSync: START sourceName=$sourceName, preferredTrack=$preferredTrack")
-
         val fenixReferer = "https://fenixplay.xyz/"
 
         val fenixHeaders = mapOf(
@@ -946,11 +930,6 @@ class AnimeONProvider : MainAPI() {
                 Triple(url, label, track.is_default == true)
             }
             ?: emptyList()
-
-        Log.d(TAG, "processFenixEpisodeSync: ${allTrackMasters.size} track masters")
-        allTrackMasters.forEachIndexed { i, (url, label, isDefault) ->
-            Log.d(TAG, "processFenixEpisodeSync: track[$i] '$label' default=$isDefault")
-        }
 
         val selectedTrack: Triple<String, String, Boolean>? = run {
             if (allTrackMasters.isEmpty()) return@run null
@@ -1002,7 +981,6 @@ class AnimeONProvider : MainAPI() {
                 headers = fenixHeaders
             )
             callback(link)
-            Log.d(TAG, "processFenixEpisodeSync: emitted '$displayName'")
         } else {
             episode.hls_master_url?.takeIf { it.isNotBlank() }?.let { url ->
                 val link = ExtractorLink(
@@ -1018,7 +996,6 @@ class AnimeONProvider : MainAPI() {
             }
         }
 
-        // Субтитри
         ensureSubtitleProxy()
 
         episode.subtitles?.forEach { sub ->
@@ -1080,8 +1057,6 @@ class AnimeONProvider : MainAPI() {
                 }
             }
         }
-
-        Log.d(TAG, "processFenixEpisodeSync: DONE")
     }
 
     private fun fetchEpisodePosterBytes(episodeId: Int): ByteArray? {
@@ -1165,7 +1140,6 @@ class AnimeONProvider : MainAPI() {
             val track = response.selection?.track
             videoUrl to track
         } catch (e: Exception) {
-            Log.e(TAG, "getEpisodeVideoInfo: parse error for epId=$episodeId", e)
             null
         }
     }
@@ -1317,8 +1291,6 @@ class AnimeONProvider : MainAPI() {
             try {
                 val translations = AppUtils.parseJson<SafeTranslationsResponse>(translationsJson).translations
                 val episodeSources = java.util.concurrent.ConcurrentHashMap<Int, MutableList<EpisodeSource>>()
-
-                // Дедуплікація: один source = translation + player + episodeId
                 val seenSourceKeys = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
                 val poolSize = (translations.sumOf { it.player.size } * 2).coerceIn(4, 24)
