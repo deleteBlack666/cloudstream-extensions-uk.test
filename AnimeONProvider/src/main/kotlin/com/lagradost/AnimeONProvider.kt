@@ -947,63 +947,127 @@ class AnimeONProvider : MainAPI() {
         return picked
     }
 
-    private suspend fun processFenixEpisodeSync(
-        episode: FenixEpisode,
-        embedUrl: String,
-        sourceName: String,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ) {
-        Log.d(TAG, "processFenixEpisodeSync: START sourceName=$sourceName")
+        private suspend fun processFenixEpisodeSync(
+    episode: FenixEpisode,
+    embedUrl: String,
+    sourceName: String,
+    subtitleCallback: (SubtitleFile) -> Unit,
+    callback: (ExtractorLink) -> Unit
+) {
+    Log.d(TAG, "processFenixEpisodeSync: START sourceName=$sourceName")
 
-        val hlsUrl = episode.hls_master_url
-        if (hlsUrl.isNullOrEmpty()) {
-            Log.w(TAG, "processFenixEpisodeSync: hls_master_url is null/empty, abort")
-            return
+    val fenixReferer = "https://fenixplay.xyz/"
+
+    val fenixHeaders = mapOf(
+        "User-Agent" to userAgent,
+        "Referer" to fenixReferer,
+        "Origin" to "https://fenixplay.xyz",
+        "Accept" to "*/*",
+        "Accept-Language" to "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7"
+    )
+
+    // Fenix віддає відео і аудіо в різних мастерах:
+    //   episode.hls_master_url — master з відео (може бути без аудіо)
+    //   track.hls_url          — повний master з відео+аудіо для конкретної доріжки
+    //
+    // Тому пріоритетно використовуємо track master. Якщо треків немає — падаємо на episode master.
+
+    val trackMasters = episode.tracks
+        ?.mapNotNull { track ->
+            val url = track.hls_url
+            if (url.isNullOrBlank()) return@mapNotNull null
+            if (!url.contains("master.m3u8", ignoreCase = true)) return@mapNotNull null
+            val label = track.label ?: track.language ?: "track"
+            url to label
         }
-        Log.d(TAG, "processFenixEpisodeSync: hlsUrl=$hlsUrl")
+        ?.distinctBy { it.first }
+        ?: emptyList()
 
-        val fenixReferer = "https://fenixplay.xyz/"
+    Log.d(TAG, "processFenixEpisodeSync: episode.hls_master_url=${episode.hls_master_url}")
+    Log.d(TAG, "processFenixEpisodeSync: ${trackMasters.size} track masters found")
+    trackMasters.forEachIndexed { i, (url, label) ->
+        Log.d(TAG, "processFenixEpisodeSync: track[$i] label='$label' url=$url")
+    }
 
-        val fenixHeaders = mapOf(
-            "User-Agent" to userAgent,
-            "Referer" to fenixReferer,
-            "Origin" to "https://fenixplay.xyz",
-            "Accept" to "*/*",
-            "Accept-Language" to "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7"
-        )
+    // Список кандидатів: трекові мастери (з аудіо) + episode master як фолбек
+    val candidates = mutableListOf<Pair<String, String>>()
 
+    // Спочатку — track masters (мають звук)
+    trackMasters.forEach { (url, label) ->
+        candidates.add(url to "$sourceName · $label")
+    }
+
+    // Потім — episode master як додатковий фолбек
+    episode.hls_master_url?.takeIf { it.isNotBlank() }?.let { url ->
+        if (candidates.none { it.first == url }) {
+            candidates.add(url to sourceName)
+        }
+    }
+
+    if (candidates.isEmpty()) {
+        Log.w(TAG, "processFenixEpisodeSync: no candidate URLs")
+        return
+    }
+
+    candidates.forEachIndexed { idx, (url, label) ->
         try {
+            Log.d(TAG, "processFenixEpisodeSync: candidate #$idx label='$label' url=$url")
             val streams = M3u8Helper.generateM3u8(
-                source = sourceName,
-                streamUrl = hlsUrl,
+                source = label,
+                streamUrl = url,
                 referer = fenixReferer,
                 headers = fenixHeaders
             )
-
-            Log.d(TAG, "processFenixEpisodeSync: generateM3u8 returned ${streams.size} streams")
-
             val filtered = streams.dropLast(1)
             val finalStreams = if (filtered.isNotEmpty()) filtered else streams
-
-            Log.d(TAG, "processFenixEpisodeSync: emitting ${finalStreams.size} streams after filter")
+            Log.d(TAG, "processFenixEpisodeSync: candidate #$idx returned ${finalStreams.size} streams")
 
             finalStreams.forEach { link ->
-                Log.d(TAG, "processFenixEpisodeSync: EMIT ${link.name} q=${link.quality} url=${link.url}")
-                callback(fixMovieExtractorLink(link, sourceName))
+                callback(fixMovieExtractorLink(link, label))
             }
         } catch (e: Exception) {
-            Log.e(TAG, "processFenixEpisodeSync: M3u8 error", e)
+            Log.e(TAG, "processFenixEpisodeSync: candidate #$idx failed", e)
         }
+    }
 
-        Log.d(TAG, "processFenixEpisodeSync: subs=${episode.subtitles?.size}, tracks=${episode.tracks?.size}")
+    // Субтитри залишаємо як є
+    Log.d(TAG, "processFenixEpisodeSync: subs=${episode.subtitles?.size}, tracks=${episode.tracks?.size}")
 
-        ensureSubtitleProxy()
+    ensureSubtitleProxy()
 
-        episode.subtitles?.forEach { sub ->
-            val url = sub.url ?: return@forEach
-            val lang = sub.label ?: sub.language ?: "UA"
-            Log.d(TAG, "processFenixEpisodeSync: subtitle [$lang] url=$url")
+    episode.subtitles?.forEach { sub ->
+        val url = sub.url ?: return@forEach
+        val lang = sub.label ?: sub.language ?: "UA"
+        try {
+            val bytes = app.get(
+                url,
+                headers = mapOf(
+                    "User-Agent" to userAgent,
+                    "Referer" to fenixReferer,
+                    "Origin" to "https://fenixplay.xyz",
+                    "Accept" to "*/*"
+                ),
+                cacheTime = 0
+            ).body.bytes()
+
+            if (bytes.isEmpty()) {
+                subtitleCallback.invoke(newSubtitleFile(lang, url))
+                return@forEach
+            }
+
+            val key = java.util.UUID.randomUUID().toString().replace("-", "")
+            subtitleCache[key] = bytes
+            val proxyUrl = "http://127.0.0.1:$subtitleProxyPort/sub?$key"
+            subtitleCallback.invoke(newSubtitleFile(lang, proxyUrl))
+        } catch (e: Exception) {
+            subtitleCallback.invoke(newSubtitleFile(lang, url))
+        }
+    }
+
+    episode.tracks?.forEach { track ->
+        val url = track.hls_url ?: return@forEach
+        if (url.contains(".vtt") || url.contains(".srt")) {
+            val lang = track.label ?: track.language ?: "UA"
             try {
                 val bytes = app.get(
                     url,
@@ -1017,7 +1081,6 @@ class AnimeONProvider : MainAPI() {
                 ).body.bytes()
 
                 if (bytes.isEmpty()) {
-                    Log.w(TAG, "processFenixEpisodeSync: subtitle [$lang] EMPTY bytes for $url")
                     subtitleCallback.invoke(newSubtitleFile(lang, url))
                     return@forEach
                 }
@@ -1025,52 +1088,16 @@ class AnimeONProvider : MainAPI() {
                 val key = java.util.UUID.randomUUID().toString().replace("-", "")
                 subtitleCache[key] = bytes
                 val proxyUrl = "http://127.0.0.1:$subtitleProxyPort/sub?$key"
-                Log.d(TAG, "processFenixEpisodeSync: subtitle [$lang] proxied (${bytes.size} bytes)")
                 subtitleCallback.invoke(newSubtitleFile(lang, proxyUrl))
             } catch (e: Exception) {
-                Log.e(TAG, "processFenixEpisodeSync: subtitle fetch failed for $url", e)
                 subtitleCallback.invoke(newSubtitleFile(lang, url))
             }
         }
-
-        episode.tracks?.forEach { track ->
-            val url = track.hls_url ?: return@forEach
-            if (url.contains(".vtt") || url.contains(".srt")) {
-                val lang = track.label ?: track.language ?: "UA"
-                Log.d(TAG, "processFenixEpisodeSync: track subtitle [$lang] url=$url")
-                try {
-                    val bytes = app.get(
-                        url,
-                        headers = mapOf(
-                            "User-Agent" to userAgent,
-                            "Referer" to fenixReferer,
-                            "Origin" to "https://fenixplay.xyz",
-                            "Accept" to "*/*"
-                        ),
-                        cacheTime = 0
-                    ).body.bytes()
-
-                    if (bytes.isEmpty()) {
-                        Log.w(TAG, "processFenixEpisodeSync: track [$lang] EMPTY bytes for $url")
-                        subtitleCallback.invoke(newSubtitleFile(lang, url))
-                        return@forEach
-                    }
-
-                    val key = java.util.UUID.randomUUID().toString().replace("-", "")
-                    subtitleCache[key] = bytes
-                    val proxyUrl = "http://127.0.0.1:$subtitleProxyPort/sub?$key"
-                    Log.d(TAG, "processFenixEpisodeSync: track [$lang] proxied (${bytes.size} bytes)")
-                    subtitleCallback.invoke(newSubtitleFile(lang, proxyUrl))
-                } catch (e: Exception) {
-                    Log.e(TAG, "processFenixEpisodeSync: track fetch failed for $url", e)
-                    subtitleCallback.invoke(newSubtitleFile(lang, url))
-                }
-            }
-        }
-
-        Log.d(TAG, "processFenixEpisodeSync: DONE")
     }
 
+    Log.d(TAG, "processFenixEpisodeSync: DONE")
+        }
+       
     private fun fetchEpisodePosterBytes(episodeId: Int): ByteArray? {
         val videoUrl = fetchEpisodeVideoUrlSync(episodeId) ?: return null
 
