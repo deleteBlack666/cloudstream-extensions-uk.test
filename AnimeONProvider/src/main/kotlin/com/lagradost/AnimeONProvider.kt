@@ -805,12 +805,13 @@ class AnimeONProvider : MainAPI() {
     }
 
     private fun processFenixEpisodeSync(
-        episode: FenixEpisode,
-        embedUrl: String,
-        sourceName: String,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ) {
+    private suspend fun processFenixEpisodeSync(
+    episode: FenixEpisode,
+    embedUrl: String,
+    sourceName: String,
+    subtitleCallback: (SubtitleFile) -> Unit,
+    callback: (ExtractorLink) -> Unit
+) {
         val hlsUrl = episode.hls_master_url ?: return
         val fenixReferer = "https://fenixplay.xyz/"
 
