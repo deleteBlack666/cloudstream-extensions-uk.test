@@ -972,63 +972,53 @@ class AnimeONProvider : MainAPI() {
     //
     // Тому пріоритетно використовуємо track master. Якщо треків немає — падаємо на episode master.
 
-    val trackMasters = episode.tracks
-        ?.mapNotNull { track ->
-            val url = track.hls_url
-            if (url.isNullOrBlank()) return@mapNotNull null
-            if (!url.contains("master.m3u8", ignoreCase = true)) return@mapNotNull null
-            val label = track.label ?: track.language ?: "track"
-            url to label
-        }
-        ?.distinctBy { it.first }
-        ?: emptyList()
-
-    Log.d(TAG, "processFenixEpisodeSync: episode.hls_master_url=${episode.hls_master_url}")
-    Log.d(TAG, "processFenixEpisodeSync: ${trackMasters.size} track masters found")
-    trackMasters.forEachIndexed { i, (url, label) ->
-        Log.d(TAG, "processFenixEpisodeSync: track[$i] label='$label' url=$url")
+    // Fenix: правильний master — це track.hls_url, а не episode.hls_master_url.
+// Кожна доріжка має свій master з video+audio (EXT-X-MEDIA).
+val trackMasters = episode.tracks
+    ?.mapNotNull { track ->
+        val url = track.hls_url
+        if (url.isNullOrBlank()) return@mapNotNull null
+        if (!url.contains("master.m3u8", ignoreCase = true)) return@mapNotNull null
+        val label = track.label ?: track.language ?: "track"
+        url to label
     }
+    ?.distinctBy { it.first }
+    ?: emptyList()
 
-    // Список кандидатів: трекові мастери (з аудіо) + episode master як фолбек
-    val candidates = mutableListOf<Pair<String, String>>()
+Log.d(TAG, "processFenixEpisodeSync: ${trackMasters.size} track masters found")
+trackMasters.forEachIndexed { i, (url, label) ->
+    Log.d(TAG, "processFenixEpisodeSync: track[$i] '$label' -> $url")
+}
 
-    // Спочатку — track masters (мають звук)
-    trackMasters.forEach { (url, label) ->
-        candidates.add(url to "$sourceName · $label")
-    }
-
-    // Потім — episode master як додатковий фолбек
+if (trackMasters.isEmpty()) {
+    Log.w(TAG, "processFenixEpisodeSync: no track masters, falling back to episode.hls_master_url")
     episode.hls_master_url?.takeIf { it.isNotBlank() }?.let { url ->
-        if (candidates.none { it.first == url }) {
-            candidates.add(url to sourceName)
-        }
+        val link = ExtractorLink(
+            source = name,
+            name = sourceName,
+            url = url,
+            referer = fenixReferer,
+            quality = com.lagradost.cloudstream3.utils.Qualities.Unknown.value,
+            type = com.lagradost.cloudstream3.utils.ExtractorLinkType.M3U8,
+            headers = fenixHeaders
+        )
+        callback(link)
     }
-
-    if (candidates.isEmpty()) {
-        Log.w(TAG, "processFenixEpisodeSync: no candidate URLs")
-        return
+} else {
+    trackMasters.forEach { (url, label) ->
+        val link = ExtractorLink(
+            source = name,
+            name = "$sourceName · $label",
+            url = url,
+            referer = fenixReferer,
+            quality = com.lagradost.cloudstream3.utils.Qualities.Unknown.value,
+            type = com.lagradost.cloudstream3.utils.ExtractorLinkType.M3U8,
+            headers = fenixHeaders
+        )
+        callback(link)
+        Log.d(TAG, "processFenixEpisodeSync: emitted M3U8 '$label'")
     }
-
-    candidates.forEachIndexed { idx, (url, label) ->
-        try {
-            Log.d(TAG, "processFenixEpisodeSync: candidate #$idx label='$label' url=$url")
-            val streams = M3u8Helper.generateM3u8(
-                source = label,
-                streamUrl = url,
-                referer = fenixReferer,
-                headers = fenixHeaders
-            )
-            val filtered = streams.dropLast(1)
-            val finalStreams = if (filtered.isNotEmpty()) filtered else streams
-            Log.d(TAG, "processFenixEpisodeSync: candidate #$idx returned ${finalStreams.size} streams")
-
-            finalStreams.forEach { link ->
-                callback(fixMovieExtractorLink(link, label))
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "processFenixEpisodeSync: candidate #$idx failed", e)
-        }
-    }
+}
 
     // Субтитри залишаємо як є
     Log.d(TAG, "processFenixEpisodeSync: subs=${episode.subtitles?.size}, tracks=${episode.tracks?.size}")
