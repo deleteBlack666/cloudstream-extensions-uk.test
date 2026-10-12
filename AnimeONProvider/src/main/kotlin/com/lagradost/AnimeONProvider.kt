@@ -30,7 +30,7 @@ class AnimeONProvider : MainAPI() {
                         .header("User-Agent", userAgent)
                         .build()
                 }
-                url.contains("fenixplay.xyz") || url.contains("cdn.fenixplay.xyz") -> {
+                url.contains("fenixplay.xyz") || url.contains("b-cdn.net") -> {
                     request.newBuilder()
                         .header("Referer", "https://fenixplay.xyz/")
                         .header("Origin", "https://fenixplay.xyz")
@@ -61,10 +61,10 @@ class AnimeONProvider : MainAPI() {
     private var moonCookieHeader: String? = null
 
     private val episodePosterCache = java.util.concurrent.ConcurrentHashMap<String, String>()
-    
-    private data class PosterFetchTask(val episodeId: Int, val animeId: Int)
+
+    private data class PosterFetchTask(val episodeId: Int, val animeId: Int, val directPosterUrl: String? = null)
     private val posterFetchTasks = java.util.concurrent.ConcurrentHashMap<String, PosterFetchTask>()
-    
+
     private data class CollectedEpisodes(val translationName: String, val playerName: String, val episodes: List<FundubEpisode>)
 
     private val posterHttpClient = okhttp3.OkHttpClient.Builder()
@@ -221,28 +221,6 @@ class AnimeONProvider : MainAPI() {
         val filler: Boolean? = null,
         val recap: Boolean? = null,
     )
-    
-    // Fenix Player Data Classes
-    private data class FenixPlaylist(
-        val episodes: List<FenixEpisode>? = null,
-        val mini_episodes: List<FenixEpisode>? = null
-    )
-
-    private data class FenixEpisode(
-        val hls_master_url: String? = null,
-        val tracks: List<FenixTrack>? = null,
-        val subtitles: List<FenixSubtitle>? = null
-    )
-
-    private data class FenixTrack(
-        val hls_url: String? = null
-    )
-
-    private data class FenixSubtitle(
-        val url: String? = null,
-        val language: String? = null,
-        val label: String? = null
-    )
 
     private fun fixMovieExtractorLink(link: ExtractorLink, sourceName: String): ExtractorLink {
         val cleanQuality = when {
@@ -308,7 +286,7 @@ class AnimeONProvider : MainAPI() {
                             val input = client.getInputStream()
                             val reader = input.bufferedReader()
                             val line = reader.readLine() ?: return@Thread
-                            
+
                             val key = line.substringAfter("?").substringBefore(" ").trim()
                             val out = client.getOutputStream()
 
@@ -317,7 +295,11 @@ class AnimeONProvider : MainAPI() {
                             if (body == null) {
                                 val task = posterFetchTasks[key]
                                 if (task != null) {
-                                    body = fetchEpisodePosterBytes(task.episodeId)
+                                    body = if (!task.directPosterUrl.isNullOrEmpty()) {
+                                        fetchPosterBytes(task.directPosterUrl).takeIf { it.isNotEmpty() }
+                                    } else {
+                                        fetchEpisodePosterBytes(task.episodeId)
+                                    }
                                     if (body != null && body.isNotEmpty()) {
                                         posterCache[key] = body
                                         episodePosterCache["${task.animeId}:${task.episodeId}"] = "http://127.0.0.1:$posterProxyPort/poster?$key"
@@ -412,8 +394,8 @@ class AnimeONProvider : MainAPI() {
                 .get()
 
             when {
-                originalUrl.contains("s.moonanime.art") || 
-                originalUrl.contains("moonanime.art") || 
+                originalUrl.contains("s.moonanime.art") ||
+                originalUrl.contains("moonanime.art") ||
                 originalUrl.contains("mooncdn.") -> {
                     requestBuilder.header("Referer", "https://moonanime.art/")
                     requestBuilder.header("Origin", "https://moonanime.art")
@@ -426,6 +408,11 @@ class AnimeONProvider : MainAPI() {
                     requestBuilder.header("Sec-Fetch-Mode", "navigate")
                     requestBuilder.header("Sec-Fetch-Site", "none")
                     requestBuilder.header("Cookie", "_ga=GA1.1.1899212404.1785951203; _gid=GA1.2.1071268545.1786650637")
+                }
+                originalUrl.contains("fenixplay.xyz") ||
+                originalUrl.contains("b-cdn.net") -> {
+                    requestBuilder.header("Referer", "https://fenixplay.xyz/")
+                    requestBuilder.header("Origin", "https://fenixplay.xyz")
                 }
             }
 
@@ -532,7 +519,7 @@ class AnimeONProvider : MainAPI() {
 
     private suspend fun fetchEpisodeInfoMap(slug: String): Map<Int, String> {
         val infoJson = fetchJsonOrNull("$mainUrl/api/anime/$slug/episodes-info") ?: return emptyMap()
-        
+
         return try {
             val list = AppUtils.parseJson<List<EpisodeInfo>>(infoJson)
             list.associate { ep ->
@@ -673,12 +660,48 @@ class AnimeONProvider : MainAPI() {
         return posterUrl
     }
 
+    private fun getFenixRawPosterUrl(videoUrl: String): String? {
+        val html = httpGetText(
+            videoUrl,
+            mapOf(
+                "User-Agent" to userAgent,
+                "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language" to "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
+                "Referer" to "$mainUrl/",
+                "Sec-Fetch-Site" to "cross-site",
+                "Sec-Fetch-Mode" to "navigate",
+                "Sec-Fetch-Dest" to "document",
+                "Upgrade-Insecure-Requests" to "1"
+            )
+        ) ?: return null
+
+        if (html.isEmpty()) return null
+
+        val posterPatterns = listOf(
+            Regex("""poster["']?\s*:\s*["'](https?://[^"']+)["']"""),
+            Regex("""thumbnail["']?\s*:\s*["'](https?://[^"']+)["']"""),
+            Regex("""image["']?\s*:\s*["'](https?://[^"']+\.(?:jpg|jpeg|png|webp)[^"']*)["']"""),
+            Regex("""(https?://(?:media|cdn)\.fenixplay\.xyz/[^\s"'<>]+\.(?:jpg|jpeg|png|webp)[^\s"'<>]*)""")
+        )
+
+        for (pattern in posterPatterns) {
+            val match = pattern.find(html)
+            if (match != null) {
+                val posterUrl = match.groupValues[1]
+                if (posterUrl.startsWith("http") && !posterUrl.contains(".m3u8")) return posterUrl
+            }
+        }
+
+        return null
+    }
+
     private fun fetchEpisodePosterBytes(episodeId: Int): ByteArray? {
         val videoUrl = fetchEpisodeVideoUrlSync(episodeId) ?: return null
-        
+
         val rawPosterUrl = when {
             videoUrl.contains("ashdi.vip") -> getAshdiRawPosterUrl(videoUrl)
             videoUrl.contains("moonanime.art") -> getMoonRawPosterUrl(videoUrl)
+            videoUrl.contains("fenixplay.xyz") -> getFenixRawPosterUrl(videoUrl)
             else -> null
         } ?: return null
 
@@ -732,7 +755,7 @@ class AnimeONProvider : MainAPI() {
     private suspend fun getEpisodeVideoUrl(episodeId: Int): String? {
         val url = "$mainUrl/api/player/$episodeId/episode"
         val json = fetchJsonOrNull(url) ?: return null
-        
+
         return try {
             val response = AppUtils.parseJson<EpisodeVideoResponse>(json)
             response.videoUrl ?: response.fileUrl
@@ -854,7 +877,7 @@ class AnimeONProvider : MainAPI() {
 
         val slug = resolveAnimeSlug(animeId)
         val realApiUrl = "$apiUrl/$slug"
-        
+
         val jsonText = fetchJsonOrNull(realApiUrl)
             ?: throw Exception("Failed to load anime $animeId")
 
@@ -903,7 +926,7 @@ class AnimeONProvider : MainAPI() {
                             for (includeAlt in listOf("true", "false")) {
                                 val tName = translation.translation.name
                                 val pName = player.name
-                                
+
                                 futures.add(episodeExecutor.submit(java.util.concurrent.Callable<CollectedEpisodes> {
                                     val collected = mutableListOf<FundubEpisode>()
                                     val seenIDs = mutableSetOf<Int>()
@@ -963,7 +986,12 @@ class AnimeONProvider : MainAPI() {
                     val sources = episodeSources[epNum] ?: return@forEach
 
                     var epPoster: String? = sources.firstNotNullOfOrNull { s ->
-                        s.apiPoster?.takeIf { it.isNotEmpty() && !it.contains("mooncdn.") }
+                        s.apiPoster?.takeIf {
+                            it.isNotEmpty() &&
+                            !it.contains("mooncdn.") &&
+                            !it.contains("fenixplay.xyz") &&
+                            !it.contains("b-cdn.net")
+                        }
                     }
 
                     if (epPoster == null) {
@@ -972,17 +1000,29 @@ class AnimeONProvider : MainAPI() {
                             epPoster = cachedPoster
                         } else {
                             val episodeId = sources.firstOrNull()?.episodeId
+                            val directPoster = sources.firstNotNullOfOrNull { s ->
+                                s.apiPoster?.takeIf {
+                                    it.isNotEmpty() &&
+                                    (it.contains("fenixplay.xyz") || it.contains("b-cdn.net"))
+                                }
+                            }
+
                             if (episodeId != null) {
                                 val key = java.util.UUID.randomUUID().toString().replace("-", "")
-                                posterFetchTasks[key] = PosterFetchTask(episodeId, animeId)
+                                posterFetchTasks[key] = PosterFetchTask(episodeId, animeId, directPoster)
                                 epPoster = "http://127.0.0.1:$posterProxyPort/poster?$key"
 
                                 val prefetchKey = key
                                 val prefetchEpisodeId = episodeId
                                 val prefetchAnimeId = animeId
+                                val prefetchDirectPoster = directPoster
                                 posterPrefetchExecutor.submit {
                                     if (!posterCache.containsKey(prefetchKey)) {
-                                        val bytes = fetchEpisodePosterBytes(prefetchEpisodeId)
+                                        val bytes = if (prefetchDirectPoster != null) {
+                                            fetchPosterBytes(prefetchDirectPoster).takeIf { it.isNotEmpty() }
+                                        } else {
+                                            fetchEpisodePosterBytes(prefetchEpisodeId)
+                                        }
                                         if (bytes != null && bytes.isNotEmpty()) {
                                             posterCache[prefetchKey] = bytes
                                             episodePosterCache["$prefetchAnimeId:$prefetchEpisodeId"] =
@@ -1099,9 +1139,9 @@ class AnimeONProvider : MainAPI() {
             val sourceName = "${source.translationName} (${source.playerName})"
             val isAshdi = source.playerName.contains("Ashdi", ignoreCase = true)
             val isFenix = source.playerName.contains("Fenix", ignoreCase = true)
-            
+
             val videoUrl = getEpisodeVideoUrl(source.episodeId)
-            
+
             if (videoUrl.isNullOrEmpty()) continue
 
             try {
@@ -1126,8 +1166,8 @@ class AnimeONProvider : MainAPI() {
 
                         foundAny = true
                     }
-                } else if (isFenix) {
-                    processFenix(videoUrl, sourceName, subtitleCallback, callback)
+                } else if (isFenix || videoUrl.contains("fenixplay.xyz")) {
+                    processFenixEmbed(videoUrl, sourceName, subtitleCallback, callback)
                     foundAny = true
                 } else {
                     if (videoUrl.contains("moonanime.art")) {
@@ -1252,7 +1292,7 @@ class AnimeONProvider : MainAPI() {
 
                                 if (!videoUrl.isNullOrEmpty() || !fileUrl.isNullOrEmpty()) {
                                     val finalUrl = videoUrl ?: fileUrl!!
-                                    
+
                                     if (isAshdi) {
                                         if (finalUrl.contains("ashdi.vip")) {
                                             processAshdiIframe(finalUrl, sourceName, isMovie = true, callback)
@@ -1274,8 +1314,8 @@ class AnimeONProvider : MainAPI() {
 
                                             foundAny = true
                                         }
-                                    } else if (isFenix) {
-                                        processFenix(finalUrl, sourceName, subtitleCallback, callback)
+                                    } else if (isFenix || finalUrl.contains("fenixplay.xyz")) {
+                                        processFenixEmbed(finalUrl, sourceName, subtitleCallback, callback)
                                         foundAny = true
                                     } else {
                                         if (finalUrl.contains("moonanime.art")) {
@@ -1317,7 +1357,7 @@ class AnimeONProvider : MainAPI() {
 
                     for (ep in collected) {
                         val videoUrl = getEpisodeVideoUrl(ep.id)
-                        
+
                         if (videoUrl.isNullOrEmpty()) continue
 
                         try {
@@ -1342,8 +1382,8 @@ class AnimeONProvider : MainAPI() {
 
                                     foundAny = true
                                 }
-                            } else if (isFenix) {
-                                processFenix(videoUrl, sourceName, subtitleCallback, callback)
+                            } else if (isFenix || videoUrl.contains("fenixplay.xyz")) {
+                                processFenixEmbed(videoUrl, sourceName, subtitleCallback, callback)
                                 foundAny = true
                             } else {
                                 if (videoUrl.contains("moonanime.art")) {
@@ -1380,6 +1420,270 @@ class AnimeONProvider : MainAPI() {
                     }
                 }
             }
+        } catch (e: Exception) {
+        }
+
+        return foundAny
+    }
+
+    private suspend fun processFenixEmbed(
+        videoUrl: String,
+        sourceName: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        val fenixVideoHeaders = mapOf(
+            "User-Agent" to userAgent,
+            "Accept" to "*/*",
+            "Accept-Language" to "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Referer" to "https://fenixplay.xyz/",
+            "Origin" to "https://fenixplay.xyz",
+            "Sec-Ch-Ua-Platform" to "\"Android\"",
+            "Sec-Fetch-Site" to "cross-site",
+            "Sec-Fetch-Mode" to "no-cors",
+            "Sec-Fetch-Dest" to "video"
+        )
+
+        val code = Regex("""/embed/([^/?]+)""").find(videoUrl)?.groupValues?.get(1)
+
+        if (code != null) {
+            val apiUrl = "https://fenixplay.xyz/api/playlist-code/$code"
+
+            val apiJson = try {
+                val response = app.get(
+                    apiUrl,
+                    headers = mapOf(
+                        "User-Agent" to userAgent,
+                        "Accept" to "application/json, text/plain, */*",
+                        "Accept-Language" to "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
+                        "Referer" to "https://fenixplay.xyz/",
+                        "Origin" to "https://fenixplay.xyz"
+                    ),
+                    cacheTime = 0
+                ).text
+                if (response.trimStart().startsWith("{") || response.trimStart().startsWith("[")) response else null
+            } catch (e: Exception) {
+                null
+            }
+
+            if (apiJson != null) {
+                val processed = processFenixApiJson(apiJson, videoUrl, sourceName, fenixVideoHeaders, subtitleCallback, callback)
+                if (processed) return
+            }
+        }
+
+        val html = try {
+            app.get(
+                videoUrl,
+                headers = mapOf(
+                    "User-Agent" to userAgent,
+                    "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "Accept-Language" to "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
+                    "Referer" to "$mainUrl/",
+                    "Sec-Fetch-Site" to "cross-site",
+                    "Sec-Fetch-Mode" to "navigate",
+                    "Sec-Fetch-Dest" to "document",
+                    "Upgrade-Insecure-Requests" to "1"
+                ),
+                cacheTime = 0
+            ).text
+        } catch (e: Exception) {
+            ""
+        }
+
+        if (html.isEmpty()) return
+
+        val m3u8Regex = Regex("""(https?://[^\s"'<>\\]+\.m3u8(?:[^\s"'<>\\]*)?)""")
+        val m3u8Urls = m3u8Regex.findAll(html).map { it.groupValues[1] }.distinct().toList()
+
+        val fileRegex = Regex("""(?:file|source|hls_url|src|url)\s*[=:]\s*["'](https?://[^"']+)["']""")
+        val fileUrls = fileRegex.findAll(html).map { it.groupValues[1] }.distinct().toList()
+
+        val allVideoUrls = (m3u8Urls + fileUrls).distinct()
+
+        for (url in allVideoUrls) {
+            when {
+                url.contains(".m3u8") -> {
+                    val streams = M3u8Helper.generateM3u8(
+                        source = sourceName,
+                        streamUrl = url,
+                        referer = "https://fenixplay.xyz/",
+                        headers = fenixVideoHeaders
+                    )
+
+                    val filtered = streams.dropLast(1)
+                    val finalStreams = if (filtered.isNotEmpty()) filtered else streams
+
+                    finalStreams.forEach { link ->
+                        callback(fixMovieExtractorLink(link, sourceName))
+                    }
+                }
+                url.contains(".mp4") || url.contains(".webm") -> {
+                    val link = ExtractorLink(
+                        source = name,
+                        name = sourceName,
+                        url = url,
+                        referer = "https://fenixplay.xyz/",
+                        quality = com.lagradost.cloudstream3.utils.Qualities.Unknown.value,
+                        type = com.lagradost.cloudstream3.utils.ExtractorLinkType.VIDEO,
+                        headers = fenixVideoHeaders
+                    )
+                    callback(fixMovieExtractorLink(link, sourceName))
+                }
+            }
+        }
+
+        val subPatterns = listOf(
+            Regex("""["'](https?://[^\s"'<>\\]+\.(?:vtt|srt)(?:[^\s"'<>\\]*)?)["']"""),
+            Regex("""(?:subtitle|subtitles|track)\s*[=:]\s*["'](https?://[^"']+)["']""")
+        )
+
+        val subUrlsSeen = mutableSetOf<String>()
+
+        for (pattern in subPatterns) {
+            for (match in pattern.findAll(html)) {
+                val subUrl = match.groupValues[1]
+                if (subUrl.isNotEmpty() && subUrlsSeen.add(subUrl)) {
+                    val lang = when {
+                        subUrl.contains("ukr", ignoreCase = true) || subUrl.contains("ua", ignoreCase = true) -> "UA"
+                        subUrl.contains("eng", ignoreCase = true) || subUrl.contains("en", ignoreCase = true) -> "EN"
+                        else -> "UA"
+                    }
+                    subtitleCallback.invoke(newSubtitleFile(lang, subUrl))
+                }
+            }
+        }
+    }
+
+    private suspend fun processFenixApiJson(
+        json: String,
+        originalUrl: String,
+        sourceName: String,
+        fenixVideoHeaders: Map<String, String>,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        var foundAny = false
+
+        try {
+            val root = org.json.JSONObject(json)
+
+            val epNum = Regex("""[?&]ep=(\d+)""").find(originalUrl)?.groupValues?.get(1)?.toIntOrNull()
+            val edition = Regex("""[?&]edition=([^&]+)""").find(originalUrl)?.groupValues?.get(1) ?: "tv"
+
+            var targetEpisode: org.json.JSONObject? = null
+
+            val episodesArray = root.optJSONArray("episodes")
+            val miniEpisodesArray = root.optJSONArray("mini_episodes")
+
+            val allEpisodes = mutableListOf<org.json.JSONObject>()
+            episodesArray?.let {
+                for (i in 0 until it.length()) allEpisodes.add(it.getJSONObject(i))
+            }
+            miniEpisodesArray?.let {
+                for (i in 0 until it.length()) allEpisodes.add(it.getJSONObject(i))
+            }
+
+            for (ep in allEpisodes) {
+                val num = ep.optInt("number", -1)
+                val ed = ep.optString("edition", "tv")
+                if (epNum != null && num == epNum && ed == edition) {
+                    targetEpisode = ep
+                    break
+                }
+            }
+
+            if (targetEpisode == null && epNum != null) {
+                for (ep in allEpisodes) {
+                    val num = ep.optInt("number", -1)
+                    if (num == epNum) {
+                        targetEpisode = ep
+                        break
+                    }
+                }
+            }
+
+            if (targetEpisode == null && allEpisodes.isNotEmpty()) {
+                targetEpisode = allEpisodes.firstOrNull()
+            }
+
+            if (targetEpisode == null) {
+                val directUrl = root.optString("hls_url", "") +
+                    root.optString("hls_master_url", "") +
+                    root.optString("file", "") +
+                    root.optString("url", "")
+
+                if (directUrl.isNotEmpty() && directUrl.contains("http")) {
+                    val streams = M3u8Helper.generateM3u8(
+                        source = sourceName,
+                        streamUrl = directUrl,
+                        referer = "https://fenixplay.xyz/",
+                        headers = fenixVideoHeaders
+                    )
+
+                    val filtered = streams.dropLast(1)
+                    val finalStreams = if (filtered.isNotEmpty()) filtered else streams
+
+                    finalStreams.forEach { link ->
+                        callback(fixMovieExtractorLink(link, sourceName))
+                    }
+                    return true
+                }
+                return false
+            }
+
+            var masterUrl = targetEpisode.optString("hls_master_url", "")
+            if (masterUrl.isEmpty()) masterUrl = targetEpisode.optString("hls_url", "")
+            if (masterUrl.isEmpty()) masterUrl = targetEpisode.optString("file", "")
+            if (masterUrl.isEmpty()) masterUrl = targetEpisode.optString("url", "")
+
+            val tracksArray = targetEpisode.optJSONArray("tracks")
+            if (tracksArray != null && tracksArray.length() > 0) {
+                var bestTrack: org.json.JSONObject? = null
+                for (i in 0 until tracksArray.length()) {
+                    val track = tracksArray.getJSONObject(i)
+                    if (track.optBoolean("is_default", false) || bestTrack == null) {
+                        bestTrack = track
+                    }
+                }
+                bestTrack?.let {
+                    val trackUrl = it.optString("hls_url", "")
+                    if (trackUrl.isNotEmpty()) {
+                        masterUrl = trackUrl
+                    }
+                }
+            }
+
+            if (masterUrl.isNotEmpty() && masterUrl.contains("http")) {
+                val streams = M3u8Helper.generateM3u8(
+                    source = sourceName,
+                    streamUrl = masterUrl,
+                    referer = "https://fenixplay.xyz/",
+                    headers = fenixVideoHeaders
+                )
+
+                val filtered = streams.dropLast(1)
+                val finalStreams = if (filtered.isNotEmpty()) filtered else streams
+
+                finalStreams.forEach { link ->
+                    callback(fixMovieExtractorLink(link, sourceName))
+                }
+                foundAny = true
+            }
+
+            val subsArray = targetEpisode.optJSONArray("subtitles")
+            if (subsArray != null) {
+                for (i in 0 until subsArray.length()) {
+                    val sub = subsArray.getJSONObject(i)
+                    val subUrl = sub.optString("url", "")
+                    val lang = sub.optString("language", sub.optString("label", "UA"))
+
+                    if (subUrl.isNotEmpty() && subUrl.contains("http")) {
+                        subtitleCallback.invoke(newSubtitleFile(lang, subUrl))
+                    }
+                }
+            }
+
         } catch (e: Exception) {
         }
 
@@ -1564,115 +1868,6 @@ class AnimeONProvider : MainAPI() {
                 }
             }
         } catch (e: Exception) {
-        }
-    }
-
-    private suspend fun processFenix(
-        videoUrl: String,
-        sourceName: String,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ) {
-        if (videoUrl.contains(".m3u8")) {
-            val streams = M3u8Helper.generateM3u8(
-                source = sourceName,
-                streamUrl = videoUrl,
-                referer = "https://fenixplay.xyz/"
-            )
-            streams.forEach { callback(it) }
-            return
-        }
-
-        val html = try {
-            app.get(
-                videoUrl,
-                headers = mapOf(
-                    "User-Agent" to userAgent,
-                    "Referer" to mainUrl,
-                    "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-                ),
-                cacheTime = 0
-            ).text
-        } catch (e: Exception) {
-            ""
-        }
-
-        if (html.isEmpty()) return
-
-        var masterUrl: String? = null
-        var subtitlesFound = false
-
-        // 1. Search for window.FENIX_PLAYLIST inline JSON
-        val playlistRegex = Regex("""window\.FENIX_PLAYLIST\s*=\s*(\{[\s\S]*?\});""")
-        val playlistMatch = playlistRegex.find(html)
-        if (playlistMatch != null) {
-            val jsonStr = playlistMatch.groupValues[1]
-            try {
-                val json = AppUtils.parseJson<FenixPlaylist>(jsonStr)
-                val ep = json.episodes?.firstOrNull() ?: json.mini_episodes?.firstOrNull()
-                masterUrl = ep?.hls_master_url ?: ep?.tracks?.firstOrNull()?.hls_url
-                
-                ep?.subtitles?.forEach { sub ->
-                    if (!sub.url.isNullOrEmpty()) {
-                        val lang = sub.language ?: sub.label ?: "und"
-                        subtitleCallback.invoke(newSubtitleFile(lang, sub.url))
-                        subtitlesFound = true
-                    }
-                }
-            } catch (e: Exception) {
-                // Ignore parsing errors and fallback to API
-            }
-        }
-
-        // 2. Search via API endpoint using code/slug
-        if (masterUrl == null) {
-            val codeRegex = Regex("""/(?:embed|vod)/([a-zA-Z0-9_-]+)""")
-            val codeMatch = codeRegex.find(videoUrl)
-            if (codeMatch != null) {
-                val code = codeMatch.groupValues[1]
-                for (endpoint in listOf("api/playlist-code", "api/playlist")) {
-                    val apiUrl = "https://fenixplay.xyz/$endpoint/$code"
-                    val apiJson = fetchJsonOrNull(apiUrl)
-                    if (apiJson != null) {
-                        try {
-                            val json = AppUtils.parseJson<FenixPlaylist>(apiJson)
-                            val ep = json.episodes?.firstOrNull() ?: json.mini_episodes?.firstOrNull()
-                            val url = ep?.hls_master_url ?: ep?.tracks?.firstOrNull()?.hls_url
-                            if (!url.isNullOrEmpty()) {
-                                masterUrl = url
-                                
-                                if (!subtitlesFound) {
-                                    ep?.subtitles?.forEach { sub ->
-                                        if (!sub.url.isNullOrEmpty()) {
-                                            val lang = sub.language ?: sub.label ?: "und"
-                                            subtitleCallback.invoke(newSubtitleFile(lang, sub.url))
-                                        }
-                                    }
-                                }
-                                break
-                            }
-                        } catch (e: Exception) {}
-                    }
-                }
-            }
-        }
-
-        // 3. Fallback: Regex search for any m3u8 in scripts
-        if (masterUrl == null) {
-            val m3u8Regex = Regex("""(https?://[^"'\s]+\.m3u8[^"'\s]*)""")
-            val m3u8Match = m3u8Regex.find(html)
-            if (m3u8Match != null) {
-                masterUrl = m3u8Match.groupValues[1]
-            }
-        }
-
-        if (!masterUrl.isNullOrEmpty()) {
-            val streams = M3u8Helper.generateM3u8(
-                source = sourceName,
-                streamUrl = masterUrl,
-                referer = "https://fenixplay.xyz/"
-            )
-            streams.forEach { callback(it) }
         }
     }
 
