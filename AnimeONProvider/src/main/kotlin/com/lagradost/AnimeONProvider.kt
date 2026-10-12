@@ -25,20 +25,22 @@ class AnimeONProvider : MainAPI() {
             val request = chain.request()
             val url = request.url.toString()
 
-            val newRequest = if (url.contains("moonanime.art") || url.contains("s.moonanime.art")) {
-                request.newBuilder()
-                    .header("Referer", "https://moonanime.art/")
-                    .header("Origin", "https://moonanime.art")
-                    .header("User-Agent", userAgent)
-                    .build()
-            } else if (url.contains("fenixplay.xyz") || url.contains("cdn.fenixplay.xyz")) {
-                request.newBuilder()
-                    .header("Referer", "https://fenixplay.xyz/")
-                    .header("Origin", "https://fenixplay.xyz")
-                    .header("User-Agent", userAgent)
-                    .build()
-            } else {
-                request
+            val newRequest = when {
+                url.contains("moonanime.art") || url.contains("s.moonanime.art") -> {
+                    request.newBuilder()
+                        .header("Referer", "https://moonanime.art/")
+                        .header("Origin", "https://moonanime.art")
+                        .header("User-Agent", userAgent)
+                        .build()
+                }
+                url.contains("fenixplay.xyz") || url.contains("cdn.fenixplay.xyz") -> {
+                    request.newBuilder()
+                        .header("Referer", "https://fenixplay.xyz/")
+                        .header("Origin", "https://fenixplay.xyz")
+                        .header("User-Agent", userAgent)
+                        .build()
+                }
+                else -> request
             }
 
             chain.proceed(newRequest)
@@ -267,6 +269,11 @@ class AnimeONProvider : MainAPI() {
         val mini_episodes: List<FenixEpisode>? = null
     )
 
+    private data class FenixMediaAccess(
+        val origin: String? = null,
+        val token: String? = null
+    )
+
     private fun fixMovieExtractorLink(link: ExtractorLink, sourceName: String): ExtractorLink {
         val cleanQuality = when {
             link.url.contains("/1080/") -> 1080
@@ -453,7 +460,7 @@ class AnimeONProvider : MainAPI() {
                     requestBuilder.header("Sec-Fetch-Site", "none")
                     requestBuilder.header("Cookie", "_ga=GA1.1.1899212404.1785951203; _gid=GA1.2.1071268545.1786650637")
                 }
-                originalUrl.contains("fenixplay.xyz") || originalUrl.contains("cdn.fenixplay.xyz") -> {
+                originalUrl.contains("fenixplay.xyz") -> {
                     requestBuilder.header("Referer", "https://fenixplay.xyz/")
                     requestBuilder.header("Origin", "https://fenixplay.xyz")
                 }
@@ -734,6 +741,64 @@ class AnimeONProvider : MainAPI() {
         }
     }
 
+    private fun extractFenixMediaAccess(html: String): FenixMediaAccess? {
+        val regex = Regex(
+            """window\.FENIX_MEDIA_ACCESS\s*=\s*(\{.*?\});""",
+            RegexOption.DOT_MATCHES_ALL
+        )
+        val match = regex.find(html) ?: return null
+        return try {
+            AppUtils.parseJson<FenixMediaAccess>(match.groupValues[1])
+        } catch (e: Exception) {
+            Log.e(TAG, "extractFenixMediaAccess: parse error", e)
+            null
+        }
+    }
+
+    private fun authorizeFenixUrl(url: String?, access: FenixMediaAccess?): String? {
+        if (url.isNullOrEmpty() || access == null) return url
+        if (access.origin.isNullOrEmpty() || access.token.isNullOrEmpty()) return url
+        return try {
+            val targetUri = java.net.URI(url)
+            val originUri = java.net.URI(access.origin)
+            if (targetUri.host != originUri.host) return url
+            val sep = if (url.contains("?")) "&" else "?"
+            val result = "$url${sep}token=${access.token}"
+            Log.d(TAG, "authorizeFenixUrl: $url -> $result")
+            result
+        } catch (e: Exception) {
+            url
+        }
+    }
+
+    private fun authorizeFenixPlaylist(playlist: FenixPlaylist, access: FenixMediaAccess?): FenixPlaylist {
+        if (access == null) return playlist
+        if (access.origin.isNullOrEmpty() || access.token.isNullOrEmpty()) return playlist
+
+        fun ep(episode: FenixEpisode): FenixEpisode = episode.copy(
+            hls_master_url = authorizeFenixUrl(episode.hls_master_url, access),
+            cast_avc_url = authorizeFenixUrl(episode.cast_avc_url, access),
+            tracks = episode.tracks?.map { t ->
+                t.copy(
+                    hls_url = authorizeFenixUrl(t.hls_url, access),
+                    cast_avc_url = authorizeFenixUrl(t.cast_avc_url, access)
+                )
+            },
+            subtitles = episode.subtitles?.map { s ->
+                s.copy(
+                    url = authorizeFenixUrl(s.url, access),
+                    styled_url = authorizeFenixUrl(s.styled_url, access),
+                    fonts_url = authorizeFenixUrl(s.fonts_url, access)
+                )
+            }
+        )
+
+        return playlist.copy(
+            episodes = playlist.episodes?.map { ep(it) },
+            mini_episodes = playlist.mini_episodes?.map { ep(it) }
+        )
+    }
+
     private suspend fun fetchFenixPlaylist(embedUrl: String): FenixPlaylist? {
         Log.d(TAG, "fetchFenixPlaylist: START for $embedUrl")
 
@@ -765,6 +830,9 @@ class AnimeONProvider : MainAPI() {
 
         Log.d(TAG, "fetchFenixPlaylist: HTML length = ${html.length}")
 
+        val mediaAccess = extractFenixMediaAccess(html)
+        Log.d(TAG, "fetchFenixPlaylist: mediaAccess.origin=${mediaAccess?.origin}, token=${mediaAccess?.token?.take(20)}...")
+
         val inlineRegex = Regex("""window\.FENIX_PLAYLIST\s*=\s*(\{.*?\});""", RegexOption.DOT_MATCHES_ALL)
         val inlineMatch = inlineRegex.find(html)
         if (inlineMatch != null) {
@@ -773,7 +841,7 @@ class AnimeONProvider : MainAPI() {
                 val p = AppUtils.parseJson<FenixPlaylist>(inlineMatch.groupValues[1])
                 if ((p.episodes?.isNotEmpty() == true) || (p.mini_episodes?.isNotEmpty() == true)) {
                     Log.d(TAG, "fetchFenixPlaylist: inline playlist OK, eps=${p.episodes?.size}, mini=${p.mini_episodes?.size}")
-                    return p
+                    return authorizeFenixPlaylist(p, mediaAccess)
                 }
                 Log.w(TAG, "fetchFenixPlaylist: inline playlist empty")
             } catch (e: Exception) {
@@ -808,11 +876,10 @@ class AnimeONProvider : MainAPI() {
             ).text
 
             Log.d(TAG, "fetchFenixPlaylist: API response length = ${json.length}")
-            Log.d(TAG, "fetchFenixPlaylist: API response first 200 chars = ${json.take(200)}")
 
             val playlist = AppUtils.parseJson<FenixPlaylist>(json)
             Log.d(TAG, "fetchFenixPlaylist: parsed OK, eps=${playlist.episodes?.size}, mini=${playlist.mini_episodes?.size}")
-            playlist
+            authorizeFenixPlaylist(playlist, mediaAccess)
         } catch (e: Exception) {
             Log.e(TAG, "fetchFenixPlaylist: API parse error", e)
             null
@@ -821,8 +888,21 @@ class AnimeONProvider : MainAPI() {
 
     private fun fetchFenixPlaylistSync(embedUrl: String): FenixPlaylist? {
         val code = fenixExtractCode(embedUrl) ?: return null
-        val apiBase = fenixOrigin(embedUrl)
+        val origin = fenixOrigin(embedUrl)
 
+        // Fetch embed page for media access
+        val html = httpGetText(
+            embedUrl,
+            mapOf(
+                "User-Agent" to userAgent,
+                "Referer" to "$mainUrl/",
+                "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+            )
+        ) ?: ""
+
+        val mediaAccess = extractFenixMediaAccess(html)
+
+        val apiBase = origin
         val apiPath = if (isSignedFenixCode(code))
             "$apiBase/api/playlist-code/$code"
         else
@@ -838,7 +918,8 @@ class AnimeONProvider : MainAPI() {
         ) ?: return null
 
         return try {
-            AppUtils.parseJson<FenixPlaylist>(json)
+            val playlist = AppUtils.parseJson<FenixPlaylist>(json)
+            authorizeFenixPlaylist(playlist, mediaAccess)
         } catch (e: Exception) {
             null
         }
@@ -861,7 +942,7 @@ class AnimeONProvider : MainAPI() {
             (it.edition ?: "tv").equals(edition, ignoreCase = true)
         } ?: allEps.firstOrNull()
 
-        Log.d(TAG, "pickFenixEpisode: picked number=${picked?.number}, edition=${picked?.edition}, title=${picked?.title}, hls=${picked?.hls_master_url}")
+        Log.d(TAG, "pickFenixEpisode: picked number=${picked?.number}, hls=${picked?.hls_master_url}")
 
         return picked
     }
@@ -935,13 +1016,19 @@ class AnimeONProvider : MainAPI() {
                     cacheTime = 0
                 ).body.bytes()
 
+                if (bytes.isEmpty()) {
+                    Log.w(TAG, "processFenixEpisodeSync: subtitle [$lang] EMPTY bytes for $url")
+                    subtitleCallback.invoke(newSubtitleFile(lang, url))
+                    return@forEach
+                }
+
                 val key = java.util.UUID.randomUUID().toString().replace("-", "")
                 subtitleCache[key] = bytes
                 val proxyUrl = "http://127.0.0.1:$subtitleProxyPort/sub?$key"
-                Log.d(TAG, "processFenixEpisodeSync: subtitle [$lang] proxied as $proxyUrl (${bytes.size} bytes)")
+                Log.d(TAG, "processFenixEpisodeSync: subtitle [$lang] proxied (${bytes.size} bytes)")
                 subtitleCallback.invoke(newSubtitleFile(lang, proxyUrl))
             } catch (e: Exception) {
-                Log.e(TAG, "processFenixEpisodeSync: subtitle fetch failed for $url, falling back to direct", e)
+                Log.e(TAG, "processFenixEpisodeSync: subtitle fetch failed for $url", e)
                 subtitleCallback.invoke(newSubtitleFile(lang, url))
             }
         }
@@ -963,13 +1050,19 @@ class AnimeONProvider : MainAPI() {
                         cacheTime = 0
                     ).body.bytes()
 
+                    if (bytes.isEmpty()) {
+                        Log.w(TAG, "processFenixEpisodeSync: track [$lang] EMPTY bytes for $url")
+                        subtitleCallback.invoke(newSubtitleFile(lang, url))
+                        return@forEach
+                    }
+
                     val key = java.util.UUID.randomUUID().toString().replace("-", "")
                     subtitleCache[key] = bytes
                     val proxyUrl = "http://127.0.0.1:$subtitleProxyPort/sub?$key"
-                    Log.d(TAG, "processFenixEpisodeSync: track [$lang] proxied as $proxyUrl (${bytes.size} bytes)")
+                    Log.d(TAG, "processFenixEpisodeSync: track [$lang] proxied (${bytes.size} bytes)")
                     subtitleCallback.invoke(newSubtitleFile(lang, proxyUrl))
                 } catch (e: Exception) {
-                    Log.e(TAG, "processFenixEpisodeSync: track subtitle fetch failed for $url, falling back to direct", e)
+                    Log.e(TAG, "processFenixEpisodeSync: track fetch failed for $url", e)
                     subtitleCallback.invoke(newSubtitleFile(lang, url))
                 }
             }
@@ -1179,20 +1272,14 @@ class AnimeONProvider : MainAPI() {
         val animeId = url.substringAfterLast("/").substringBefore("-").toIntOrNull()
             ?: throw Exception("Invalid anime ID in URL: $url")
 
-        Log.d(TAG, "load: animeId=$animeId")
-
         val slug = resolveAnimeSlug(animeId)
         val realApiUrl = "$apiUrl/$slug"
-
-        Log.d(TAG, "load: slug=$slug, realApiUrl=$realApiUrl")
 
         val jsonText = fetchJsonOrNull(realApiUrl)
             ?: throw Exception("Failed to load anime $animeId")
 
         val animeJSON = AppUtils.parseJson<SafeAnimeInfoModel>(jsonText)
             ?: throw Exception("Failed to parse anime $animeId")
-
-        Log.d(TAG, "load: parsed anime '${animeJSON.titleUa}', type=${animeJSON.type}")
 
         val posterUrl = animeJSON.image?.preview?.let { posterApi.format(it) } ?: ""
         val genres = animeJSON.genres?.map { it.nameUa } ?: emptyList()
@@ -1220,11 +1307,6 @@ class AnimeONProvider : MainAPI() {
         if (translationsJson != null) {
             try {
                 val translations = AppUtils.parseJson<SafeTranslationsResponse>(translationsJson).translations
-
-                Log.d(TAG, "load: found ${translations.size} translations")
-                translations.forEach { t ->
-                    Log.d(TAG, "load: translation '${t.translation.name}' (id=${t.translation.id}) players: ${t.player.map { "${it.name}(id=${it.id}, eps=${it.episodesCount})" }}")
-                }
 
                 val episodeSources = java.util.concurrent.ConcurrentHashMap<Int, MutableList<EpisodeSource>>()
 
@@ -1275,7 +1357,6 @@ class AnimeONProvider : MainAPI() {
                     for (future in futures) {
                         try {
                             val result = future.get(15, java.util.concurrent.TimeUnit.SECONDS) ?: continue
-                            Log.d(TAG, "load: collected ${result.episodes.size} eps for '${result.translationName}' / '${result.playerName}'")
                             for (ep in result.episodes) {
                                 val sources = episodeSources.getOrPut(ep.episode) { mutableListOf() }
                                 sources.add(
@@ -1294,11 +1375,6 @@ class AnimeONProvider : MainAPI() {
                     }
                 } finally {
                     episodeExecutor.shutdown()
-                }
-
-                Log.d(TAG, "load: total episodes with sources = ${episodeSources.size}")
-                episodeSources.toSortedMap().forEach { (num, srcs) ->
-                    Log.d(TAG, "load: ep $num -> players: ${srcs.map { "${it.playerName}(${it.translationName}) epId=${it.episodeId}" }}")
                 }
 
                 ensurePosterProxy()
@@ -1346,8 +1422,6 @@ class AnimeONProvider : MainAPI() {
 
                     val episodeName = episodeInfoMap[epNum]?.takeIf { it.isNotBlank() }
 
-                    Log.d(TAG, "load: ep $epNum dataJson=${dataJson.take(300)}")
-
                     episodes.add(
                         newEpisode(dataJson).apply {
                             this.name = episodeName
@@ -1362,8 +1436,6 @@ class AnimeONProvider : MainAPI() {
             } catch (e: Exception) {
                 Log.e(TAG, "load: exception while building episodes", e)
             }
-        } else {
-            Log.w(TAG, "load: no translations JSON")
         }
 
         val franchise = buildFranchise(animeId)
@@ -1422,12 +1494,10 @@ class AnimeONProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         Log.d(TAG, "=== loadLinks() START, data length=${data.length} ===")
-        Log.d(TAG, "loadLinks: data=${data.take(500)}")
 
         val animeId = data.trim().toIntOrNull()
 
         if (animeId != null) {
-            Log.d(TAG, "loadLinks: detected movie mode for animeId=$animeId")
             return loadMovieLinks(animeId, subtitleCallback, callback)
         }
 
@@ -1436,11 +1506,6 @@ class AnimeONProvider : MainAPI() {
         } catch (e: Exception) {
             Log.e(TAG, "loadLinks: failed to parse sources JSON", e)
             return false
-        }
-
-        Log.d(TAG, "loadLinks: parsed ${sources.size} sources")
-        sources.forEachIndexed { i, s ->
-            Log.d(TAG, "loadLinks: source[$i] player='${s.playerName}' translation='${s.translationName}' epId=${s.episodeId} epNum=${s.episodeNum}")
         }
 
         if (sources.isEmpty()) {
@@ -1468,42 +1533,25 @@ class AnimeONProvider : MainAPI() {
             val isAshdi = source.playerName.contains("Ashdi", ignoreCase = true)
             val isFenix = source.playerName.contains("Fenix", ignoreCase = true)
 
-            Log.d(TAG, "loadLinks: processing '$sourceName' isAshdi=$isAshdi isFenix=$isFenix")
+            Log.d(TAG, "loadLinks: processing '$sourceName' isFenix=$isFenix")
 
             val videoUrl = getEpisodeVideoUrl(source.episodeId)
-
-            if (videoUrl.isNullOrEmpty()) {
-                Log.w(TAG, "loadLinks: SKIP '$sourceName' - no videoUrl")
-                continue
-            }
-
-            Log.d(TAG, "loadLinks: '$sourceName' videoUrl=$videoUrl")
+            if (videoUrl.isNullOrEmpty()) continue
 
             try {
-                if (isFenix) {
-                    if (!videoUrl.contains("fenixplay.xyz")) {
-                        Log.w(TAG, "loadLinks: '$sourceName' is Fenix but url does not contain fenixplay.xyz -> $videoUrl")
-                        continue
-                    }
-                    Log.d(TAG, "loadLinks: FENIX branch for '$sourceName'")
+                if (isFenix && videoUrl.contains("fenixplay.xyz")) {
                     val playlist = fetchFenixPlaylist(videoUrl)
-                    if (playlist == null) {
-                        Log.w(TAG, "loadLinks: fetchFenixPlaylist returned null for '$sourceName'")
-                        continue
+                    if (playlist != null) {
+                        val episode = pickFenixEpisode(playlist, videoUrl)
+                        if (episode != null) {
+                            processFenixEpisodeSync(episode, videoUrl, sourceName, subtitleCallback, callback)
+                            foundAny = true
+                        }
                     }
-                    val episode = pickFenixEpisode(playlist, videoUrl)
-                    if (episode == null) {
-                        Log.w(TAG, "loadLinks: pickFenixEpisode returned null for '$sourceName'")
-                        continue
-                    }
-                    Log.d(TAG, "loadLinks: FENIX emit streams for '$sourceName'")
-                    processFenixEpisodeSync(episode, videoUrl, sourceName, subtitleCallback, callback)
-                    foundAny = true
                     continue
                 }
 
                 if (isAshdi) {
-                    Log.d(TAG, "loadLinks: ASHDI branch for '$sourceName'")
                     if (videoUrl.contains("ashdi.vip")) {
                         processAshdiIframe(videoUrl, sourceName, isMovie = false, callback)
                         foundAny = true
@@ -1523,12 +1571,9 @@ class AnimeONProvider : MainAPI() {
                         }
 
                         foundAny = true
-                    } else {
-                        Log.w(TAG, "loadLinks: ASHDI url unknown format: $videoUrl")
                     }
                 } else {
                     if (videoUrl.contains("moonanime.art")) {
-                        Log.d(TAG, "loadLinks: MOON branch for '$sourceName'")
                         if (videoUrl.contains("m3u8")) {
                             val streams = M3u8Helper.generateM3u8(
                                 source = sourceName,
@@ -1555,8 +1600,6 @@ class AnimeONProvider : MainAPI() {
                                 foundAny = true
                             }
                         }
-                    } else {
-                        Log.w(TAG, "loadLinks: unknown player for '$sourceName' videoUrl=$videoUrl")
                     }
                 }
             } catch (e: Exception) {
@@ -1573,12 +1616,7 @@ class AnimeONProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        Log.d(TAG, "=== loadMovieLinks() START animeId=$animeId ===")
-
-        val translationsJson = fetchJsonOrNull("$mainUrl/api/player/$animeId/translations") ?: run {
-            Log.w(TAG, "loadMovieLinks: no translations JSON")
-            return false
-        }
+        val translationsJson = fetchJsonOrNull("$mainUrl/api/player/$animeId/translations") ?: return false
 
         var foundAny = false
 
@@ -1648,8 +1686,6 @@ class AnimeONProvider : MainAPI() {
                     val isAshdi = player.name.contains("Ashdi", ignoreCase = true)
                     val isFenix = player.name.contains("Fenix", ignoreCase = true)
 
-                    Log.d(TAG, "loadMovieLinks: '$sourceName' isAshdi=$isAshdi isFenix=$isFenix collected=${collected.size}")
-
                     if (collected.isEmpty()) {
                         val directJson = fetchJsonOrNull("$mainUrl/api/player/${player.id}/${translation.translation.id}")
 
@@ -1661,10 +1697,8 @@ class AnimeONProvider : MainAPI() {
 
                                 if (!videoUrl.isNullOrEmpty() || !fileUrl.isNullOrEmpty()) {
                                     val finalUrl = videoUrl ?: fileUrl!!
-                                    Log.d(TAG, "loadMovieLinks: direct finalUrl=$finalUrl")
 
                                     if (isFenix && finalUrl.contains("fenixplay.xyz")) {
-                                        Log.d(TAG, "loadMovieLinks: FENIX direct branch")
                                         val playlist = fetchFenixPlaylist(finalUrl)
                                         if (playlist != null) {
                                             val episode = pickFenixEpisode(playlist, finalUrl)
@@ -1729,7 +1763,6 @@ class AnimeONProvider : MainAPI() {
                                     }
                                 }
                             } catch (e: Exception) {
-                                Log.e(TAG, "loadMovieLinks: direct parse error", e)
                             }
                         }
 
@@ -1741,11 +1774,8 @@ class AnimeONProvider : MainAPI() {
 
                         if (videoUrl.isNullOrEmpty()) continue
 
-                        Log.d(TAG, "loadMovieLinks: ep=${ep.episode} epId=${ep.id} videoUrl=$videoUrl")
-
                         try {
                             if (isFenix && videoUrl.contains("fenixplay.xyz")) {
-                                Log.d(TAG, "loadMovieLinks: FENIX branch for ep=${ep.episode}")
                                 val playlist = fetchFenixPlaylist(videoUrl)
                                 if (playlist != null) {
                                     val episode = pickFenixEpisode(playlist, videoUrl)
@@ -1809,16 +1839,13 @@ class AnimeONProvider : MainAPI() {
                                 }
                             }
                         } catch (e: Exception) {
-                            Log.e(TAG, "loadMovieLinks: exception for ep=${ep.episode}", e)
                         }
                     }
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "loadMovieLinks: outer exception", e)
         }
 
-        Log.d(TAG, "=== loadMovieLinks() DONE, foundAny=$foundAny ===")
         return foundAny
     }
 
@@ -2000,7 +2027,6 @@ class AnimeONProvider : MainAPI() {
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "processAshdiIframe: error", e)
         }
     }
 
