@@ -1444,32 +1444,77 @@ class AnimeONProvider : MainAPI() {
             "Sec-Fetch-Dest" to "video"
         )
 
-        val code = Regex("""/embed/([^/?]+)""").find(videoUrl)?.groupValues?.get(1)
+        val rawCode = Regex("""[?&]code=([^&]+)""").find(videoUrl)?.groupValues?.get(1)
+            ?: Regex("""/(?:embed|vod)/([^/?#]+)""").find(videoUrl)?.groupValues?.get(1)
+        
+        val code = rawCode?.let { 
+            try { java.net.URLDecoder.decode(it, "UTF-8") } catch (e: Exception) { it }
+        }
 
-        if (code != null) {
-            val apiUrl = "https://fenixplay.xyz/api/playlist-code/$code"
+        val rawSlug = Regex("""[?&]slug=([^&]+)""").find(videoUrl)?.groupValues?.get(1)
+        val slug = rawSlug?.let { 
+            try { java.net.URLDecoder.decode(it, "UTF-8") } catch (e: Exception) { it }
+        }
 
-            val apiJson = try {
-                val response = app.get(
-                    apiUrl,
-                    headers = mapOf(
-                        "User-Agent" to userAgent,
-                        "Accept" to "application/json, text/plain, */*",
-                        "Accept-Language" to "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
-                        "Referer" to "https://fenixplay.xyz/",
-                        "Origin" to "https://fenixplay.xyz"
-                    ),
-                    cacheTime = 0
-                ).text
-                if (response.trimStart().startsWith("{") || response.trimStart().startsWith("[")) response else null
-            } catch (e: Exception) {
-                null
+        val isSigned = code != null && Regex("""^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$""").matches(code)
+        
+        val primaryApiUrl = when {
+            isSigned -> "https://fenixplay.xyz/api/playlist-code/$code"
+            code != null -> "https://fenixplay.xyz/api/playlist/$code"
+            slug != null -> "https://fenixplay.xyz/api/playlist/$slug"
+            else -> null
+        }
+
+        var apiJson: String? = null
+        val domains = listOf("https://fenixplay.xyz", "https://api.fenixplay.xyz")
+        
+        if (primaryApiUrl != null) {
+            for (domain in domains) {
+                val testUrl = primaryApiUrl.replace("https://fenixplay.xyz", domain)
+                apiJson = try {
+                    val response = app.get(
+                        testUrl,
+                        headers = mapOf(
+                            "User-Agent" to userAgent,
+                            "Accept" to "application/json, text/plain, */*",
+                            "Accept-Language" to "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
+                            "Referer" to "https://fenixplay.xyz/",
+                            "Origin" to "https://fenixplay.xyz"
+                        ),
+                        cacheTime = 0
+                    ).text
+                    if (response.trimStart().startsWith("{") || response.trimStart().startsWith("[")) response else null
+                } catch (e: Exception) {
+                    null
+                }
+                if (apiJson != null) break
+                
+                if (!isSigned && code != null) {
+                    val altUrl = "$domain/api/playlist-code/$code"
+                    apiJson = try {
+                        val response = app.get(
+                            altUrl,
+                            headers = mapOf(
+                                "User-Agent" to userAgent,
+                                "Accept" to "application/json, text/plain, */*",
+                                "Accept-Language" to "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
+                                "Referer" to "https://fenixplay.xyz/",
+                                "Origin" to "https://fenixplay.xyz"
+                            ),
+                            cacheTime = 0
+                        ).text
+                        if (response.trimStart().startsWith("{") || response.trimStart().startsWith("[")) response else null
+                    } catch (e: Exception) {
+                        null
+                    }
+                    if (apiJson != null) break
+                }
             }
+        }
 
-            if (apiJson != null) {
-                val processed = processFenixApiJson(apiJson, videoUrl, sourceName, fenixVideoHeaders, subtitleCallback, callback)
-                if (processed) return
-            }
+        if (apiJson != null) {
+            val processed = processFenixApiJson(apiJson, videoUrl, sourceName, fenixVideoHeaders, subtitleCallback, callback)
+            if (processed) return
         }
 
         val html = try {
@@ -1492,6 +1537,34 @@ class AnimeONProvider : MainAPI() {
         }
 
         if (html.isEmpty()) return
+
+        val apiBaseMatch = Regex("""FENIX_API_BASE\s*=\s*["']([^"']+)["']""").find(html)?.groupValues?.get(1)
+        val apiBase = if (apiBaseMatch != null && apiBaseMatch.startsWith("http")) apiBaseMatch else "https://fenixplay.xyz"
+        
+        if (primaryApiUrl != null && apiJson == null) {
+            val fallbackUrl = primaryApiUrl.replace("https://fenixplay.xyz", apiBase)
+            apiJson = try {
+                val response = app.get(
+                    fallbackUrl,
+                    headers = mapOf(
+                        "User-Agent" to userAgent,
+                        "Accept" to "application/json, text/plain, */*",
+                        "Accept-Language" to "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
+                        "Referer" to "https://fenixplay.xyz/",
+                        "Origin" to "https://fenixplay.xyz"
+                    ),
+                    cacheTime = 0
+                ).text
+                if (response.trimStart().startsWith("{") || response.trimStart().startsWith("[")) response else null
+            } catch (e: Exception) {
+                null
+            }
+            
+            if (apiJson != null) {
+                val processed = processFenixApiJson(apiJson, videoUrl, sourceName, fenixVideoHeaders, subtitleCallback, callback)
+                if (processed) return
+            }
+        }
 
         val m3u8Regex = Regex("""(https?://[^\s"'<>\\]+\.m3u8(?:[^\s"'<>\\]*)?)""")
         val m3u8Urls = m3u8Regex.findAll(html).map { it.groupValues[1] }.distinct().toList()
@@ -1603,6 +1676,13 @@ class AnimeONProvider : MainAPI() {
                 }
             }
 
+            if (targetEpisode == null && epNum != null) {
+                val index = epNum - 1
+                if (index >= 0 && index < allEpisodes.size) {
+                    targetEpisode = allEpisodes[index]
+                }
+            }
+
             if (targetEpisode == null && allEpisodes.isNotEmpty()) {
                 targetEpisode = allEpisodes.firstOrNull()
             }
@@ -1642,9 +1722,11 @@ class AnimeONProvider : MainAPI() {
                 var bestTrack: org.json.JSONObject? = null
                 for (i in 0 until tracksArray.length()) {
                     val track = tracksArray.getJSONObject(i)
-                    if (track.optBoolean("is_default", false) || bestTrack == null) {
+                    if (track.optBoolean("is_default", false)) {
                         bestTrack = track
+                        break
                     }
+                    if (bestTrack == null) bestTrack = track
                 }
                 bestTrack?.let {
                     val trackUrl = it.optString("hls_url", "")
@@ -1652,6 +1734,10 @@ class AnimeONProvider : MainAPI() {
                         masterUrl = trackUrl
                     }
                 }
+            }
+
+            if (masterUrl.isNotEmpty() && !masterUrl.startsWith("http")) {
+                masterUrl = "https://fenixplay.xyz$masterUrl"
             }
 
             if (masterUrl.isNotEmpty() && masterUrl.contains("http")) {
