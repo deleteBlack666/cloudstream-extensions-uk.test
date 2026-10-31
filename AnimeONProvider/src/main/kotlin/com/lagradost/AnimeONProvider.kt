@@ -810,6 +810,26 @@ class AnimeONProvider : MainAPI() {
         }
 
         if (posterUrl.isNullOrEmpty() || posterUrl.contains("mooncdn.")) {
+            val patterns = listOf(
+                Regex("""((?:https?:)?//[^"'\s\\]+/poster\.(?:webp|jpg|jpeg|png)(?:\?[^"'\s\\]*)?)"""),
+                Regex("""poster["']?\s*:\s*["']([^"']+)["']"""),
+                Regex("""((?:https?:)?//[^"'\s]+screen\.jpg)"""),
+                Regex("""((?:https?:)?//[^"'\s]+\.ashdi\.vip[^"'\s]*(?:screen|poster)[^"'\s]*)""")
+            )
+            for (pattern in patterns) {
+                val match = pattern.find(html)
+                if (match != null) {
+                    val extracted = match.groupValues[1]
+                    val finalUrl = if (extracted.startsWith("//")) "https:$extracted" else extracted
+                    if (finalUrl.isNotBlank() && !finalUrl.contains("mooncdn.")) {
+                        posterUrl = finalUrl
+                        break
+                    }
+                }
+            }
+        }
+
+        if (posterUrl.isNullOrEmpty() || posterUrl.contains("mooncdn.")) {
             Log.e(TAG, "getMoonRawPosterUrl: no valid poster (raw=$posterUrl)")
             return null
         }
@@ -1008,7 +1028,6 @@ class AnimeONProvider : MainAPI() {
         val mediaAccess = extractFenixMediaAccess(html)
         lastFenixMediaAccess = mediaAccess
 
-        // Спробувати inline FENIX_PLAYLIST (містить playback.token!)
         val inlineRegex = Regex("""window\.FENIX_PLAYLIST\s*=\s*(\{.*?\});""", RegexOption.DOT_MATCHES_ALL)
         inlineRegex.find(html)?.let { m ->
             try {
@@ -1951,7 +1970,6 @@ class AnimeONProvider : MainAPI() {
                         }
                     }
 
-                    // Fallback — старий метод (якщо новий не спрацював)
                     val info = getEpisodeVideoInfo(source.episodeId)
                     val preferredTrack = info?.second
                     val playlist = fetchFenixPlaylist(videoUrl)
@@ -2258,7 +2276,6 @@ class AnimeONProvider : MainAPI() {
                                             }
                                         }
 
-                                        // Fallback
                                         val preferredTrack = directSource.selection?.track
                                         val playlist = fetchFenixPlaylist(finalUrl)
                                         if (playlist != null) {
@@ -2450,7 +2467,6 @@ class AnimeONProvider : MainAPI() {
                                     }
                                 }
 
-                                // Fallback
                                 val info = getEpisodeVideoInfo(ep.id)
                                 val preferredTrack = info?.second
                                 val playlist = fetchFenixPlaylist(videoUrl)
@@ -2893,7 +2909,7 @@ class AnimeONProvider : MainAPI() {
                                 decoded.contains("s.moonanime.net")
 
                         val isStaticAsset = decoded.contains(
-                            Regex("""\.(jpg|jpeg|png|vtt|srt|txt)(\?|$)""", RegexOption.IGNORE_CASE)
+                            Regex("""\.(jpg|jpeg|png|webp|avif|vtt|srt|txt)(\?|$)""", RegexOption.IGNORE_CASE)
                         )
 
                         if ((isVideoOrPlaylist || isMoonDomain) && !isStaticAsset) {
