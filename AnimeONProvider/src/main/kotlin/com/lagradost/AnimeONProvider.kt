@@ -1,5 +1,6 @@
 package com.lagradost
 
+import android.util.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addMalId
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
@@ -9,6 +10,8 @@ import com.lagradost.cloudstream3.utils.M3u8Helper
 import com.lagradost.models.*
 
 class AnimeONProvider : MainAPI() {
+
+    private val TAG = "AnimeON"
 
     override var mainUrl = "https://animeon.club"
     override var name = "AnimeON"
@@ -738,15 +741,47 @@ class AnimeONProvider : MainAPI() {
         }
     }
 
+    private fun extractJsonBlock(html: String, varName: String): String? {
+        val idx = html.indexOf(varName)
+        if (idx == -1) return null
+        val start = html.indexOf("{", idx)
+        if (start == -1) return null
+        var depth = 0
+        var inString = false
+        var escaped = false
+        for (i in start until html.length) {
+            val c = html[i]
+            if (escaped) {
+                escaped = false
+                continue
+            }
+            if (c == '\\') {
+                escaped = true
+                continue
+            }
+            if (c == '"') {
+                inString = !inString
+                continue
+            }
+            if (!inString) {
+                if (c == '{') depth++
+                else if (c == '}') {
+                    depth--
+                    if (depth == 0) {
+                        return html.substring(start, i + 1)
+                    }
+                }
+            }
+        }
+        return null
+    }
+
     private fun extractFenixMediaAccess(html: String): FenixMediaAccess? {
-        val regex = Regex(
-            """window\.FENIX_MEDIA_ACCESS\s*=\s*(\{.*?\});""",
-            RegexOption.DOT_MATCHES_ALL
-        )
-        val match = regex.find(html) ?: return null
+        val json = extractJsonBlock(html, "window.FENIX_MEDIA_ACCESS") ?: return null
         return try {
-            AppUtils.parseJson<FenixMediaAccess>(match.groupValues[1])
+            AppUtils.parseJson<FenixMediaAccess>(json)
         } catch (e: Exception) {
+            Log.e(TAG, "Failed to parse FENIX_MEDIA_ACCESS", e)
             null
         }
     }
@@ -813,16 +848,17 @@ class AnimeONProvider : MainAPI() {
         }
 
         val mediaAccess = extractFenixMediaAccess(html)
+        Log.d(TAG, "Fenix media access: ${mediaAccess?.origin} token=${mediaAccess?.token?.take(10)}")
 
-        val inlineRegex = Regex("""window\.FENIX_PLAYLIST\s*=\s*(\{.*?\});""", RegexOption.DOT_MATCHES_ALL)
-        val inlineMatch = inlineRegex.find(html)
-        if (inlineMatch != null) {
+        val inlineJson = extractJsonBlock(html, "window.FENIX_PLAYLIST")
+        if (inlineJson != null) {
             try {
-                val p = AppUtils.parseJson<FenixPlaylist>(inlineMatch.groupValues[1])
+                val p = AppUtils.parseJson<FenixPlaylist>(inlineJson)
                 if ((p.episodes?.isNotEmpty() == true) || (p.mini_episodes?.isNotEmpty() == true)) {
                     return authorizeFenixPlaylist(p, mediaAccess)
                 }
             } catch (e: Exception) {
+                Log.e(TAG, "Failed to parse inline FENIX_PLAYLIST", e)
             }
         }
 
@@ -849,6 +885,7 @@ class AnimeONProvider : MainAPI() {
             val playlist = AppUtils.parseJson<FenixPlaylist>(json)
             authorizeFenixPlaylist(playlist, mediaAccess)
         } catch (e: Exception) {
+            Log.e(TAG, "Failed to fetch FENIX_PLAYLIST from API", e)
             null
         }
     }
@@ -2168,173 +2205,4 @@ class AnimeONProvider : MainAPI() {
                         }
                     }
 
-                    val encodedRegex = Regex("""_0xd\s*\(\s*["']([^"']+)["']\s*\)""")
-                    val encMatches = encodedRegex.findAll(decodedJs).toList()
-
-                    val allDecoded = mutableListOf<String>()
-
-                    for (match in encMatches) {
-                        val decoded = moonDecrypt(match.groupValues[1], xorKey)
-
-                        if (decoded.isNotEmpty()) {
-                            allDecoded.add(decoded)
-                        }
-                    }
-
-                    for (decoded in allDecoded) {
-                        val isVideoOrPlaylist = decoded.contains(".m3u8") ||
-                                decoded.contains(".mp4") ||
-                                decoded.contains(".webm") ||
-                                decoded.startsWith("[")
-
-                        val isMoonDomain = decoded.contains("mooncdn") ||
-                                decoded.contains("moonanime.net/content") ||
-                                decoded.contains("s.moonanime.net")
-
-                        val isStaticAsset = decoded.contains(
-                            Regex("""\.(jpg|jpeg|png|vtt|srt|txt)(\?|$)""", RegexOption.IGNORE_CASE)
-                        )
-
-                        if ((isVideoOrPlaylist || isMoonDomain) && !isStaticAsset) {
-                            return Pair(decoded, subtitleUrl)
-                        }
-                    }
-                }
-
-                val contentUrlRegex = Regex("""(https?://s\.moonanime\.net/content/[^\s"'`]+)""")
-                val contentMatch = contentUrlRegex.find(decodedJs)?.groupValues?.get(1)
-
-                if (!contentMatch.isNullOrEmpty() && !contentMatch.contains(Regex("""\.(jpg|jpeg|png)$"""))) {
-                    val resolved = resolveMoonContent(contentMatch)
-
-                    if (!resolved.isNullOrEmpty()) {
-                        return Pair(resolved, subtitleUrl)
-                    }
-                }
-            }
-        }
-
-        val hashRegex = Regex("""/iframe/([a-zA-Z0-9]+)/?""")
-        val hash = hashRegex.find(cleanUrl)?.groupValues?.get(1)
-
-        if (!hash.isNullOrEmpty()) {
-            val qualityResults = mutableListOf<String>()
-
-            for (quality in listOf(1080, 720, 480, 360)) {
-                val contentUrl = "https://s.moonanime.net/content/v/$hash/$quality/"
-                val resolved = resolveMoonContent(contentUrl)
-
-                if (!resolved.isNullOrEmpty()) {
-                    qualityResults.add("[${quality}p]$resolved")
-                }
-            }
-
-            if (qualityResults.isNotEmpty()) {
-                val result = qualityResults.joinToString(".")
-                return Pair(result, null)
-            }
-        }
-
-        return Pair("", null)
-    }
-
-    private var subtitleProxyPort: Int = 0
-    private val subtitleCache = java.util.concurrent.ConcurrentHashMap<String, ByteArray>()
-
-    private fun ensureSubtitleProxy() {
-        if (subtitleProxyPort != 0) return
-
-        val serverSocket = java.net.ServerSocket(0)
-        subtitleProxyPort = serverSocket.localPort
-
-        Thread {
-            while (!serverSocket.isClosed) {
-                try {
-                    val client = serverSocket.accept()
-
-                    Thread {
-                        try {
-                            val line = client.getInputStream().bufferedReader().readLine() ?: return@Thread
-                            val key = line.substringAfter("?").substringBefore(" ")
-                            val body = subtitleCache[key]
-                            val out = client.getOutputStream()
-
-                            if (body != null) {
-                                out.write(
-                                    (
-                                        "HTTP/1.1 200 OK\r\n" +
-                                        "Content-Type: text/vtt; charset=utf-8\r\n" +
-                                        "Content-Length: ${body.size}\r\n" +
-                                        "Access-Control-Allow-Origin: *\r\n" +
-                                        "Connection: close\r\n\r\n"
-                                    ).toByteArray()
-                                )
-                                out.write(body)
-                            } else {
-                                out.write(
-                                    "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-                                        .toByteArray()
-                                )
-                            }
-
-                            out.flush()
-                            client.close()
-                        } catch (e: Exception) {
-                        }
-                    }.also { it.isDaemon = true }.start()
-                } catch (e: Exception) {
-                }
-            }
-        }.also { it.isDaemon = true }.start()
-    }
-
-    private suspend fun invokeSubtitles(subUrl: String?, subtitleCallback: (SubtitleFile) -> Unit) {
-        if (subUrl == null) {
-            return
-        }
-
-        ensureSubtitleProxy()
-
-        subUrl.split("|||").forEach { entry ->
-            val parts = entry.split("::", limit = 2)
-
-            if (parts.size == 2) {
-                val lang = parts[0]
-                val url = parts[1]
-
-                try {
-                    val bytes = app.get(
-                        url,
-                        headers = mapOf(
-                            "User-Agent" to userAgent,
-                            "Referer" to "https://moonanime.net/",
-                            "Origin" to "https://moonanime.net",
-                            "Accept" to "*/*",
-                            "Accept-Language" to "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
-                        ),
-                        cacheTime = 0
-                    ).body.bytes()
-
-                    val key = java.util.UUID.randomUUID().toString().replace("-", "")
-                    subtitleCache[key] = bytes
-
-                    val proxyUrl = "http://127.0.0.1:$subtitleProxyPort/sub?$key"
-
-                    subtitleCallback.invoke(newSubtitleFile(lang, proxyUrl))
-                } catch (e: Exception) {
-                    subtitleCallback.invoke(newSubtitleFile(lang, url))
-                }
-            }
-        }
-    }
-
-    private fun extractIntFromString(string: String): Int? {
-        val value = Regex("(\\d+)").findAll(string).lastOrNull() ?: return null
-
-        if (value.value[0].toString() == "0") {
-            return value.value.drop(1).toIntOrNull()
-        }
-
-        return value.value.toIntOrNull()
-    }
-}
+                    val encodedRegex = Regex("""_
