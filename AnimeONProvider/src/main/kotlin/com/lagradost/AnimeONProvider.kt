@@ -789,7 +789,7 @@ class AnimeONProvider : MainAPI() {
 
         for (match in atobRegex.findAll(html)) {
             val decoded = moonOuterDecode(match.groupValues[1])
-            if (!decoded.contains("poster")) continue
+            if (!decoded.contains("poster") && !decoded.contains("k=")) continue
 
             posterUrl = Regex("""poster\s*:\s*["'](https?://[^"']+)["']""")
                 .find(decoded)?.groupValues?.get(1)
@@ -799,14 +799,17 @@ class AnimeONProvider : MainAPI() {
             val xorKey = Regex("""var\s+k\s*=\s*["']([^"']+)["']""")
                 .find(decoded)?.groupValues?.get(1) ?: continue
 
-            val posterEnc = Regex("""poster\s*:\s*_0xd\s*\(\s*["']([^"']+)["']\s*\)""")
-                .find(decoded)?.groupValues?.get(1) ?: continue
-
-            val result = moonDecrypt(posterEnc, xorKey)
-            if (result.startsWith("http")) {
-                posterUrl = result
-                break
+            val callRegex = Regex("""(\w+)\s*\(\s*["']([A-Za-z0-9+/=]+)["']\s*\)""")
+            var foundInCalls = false
+            for (callMatch in callRegex.findAll(decoded)) {
+                val result = moonDecrypt(callMatch.groupValues[2], xorKey)
+                if (result.startsWith("http") && (result.contains("poster") || result.contains(".webp") || result.contains(".jpg") || result.contains(".png"))) {
+                    posterUrl = result
+                    foundInCalls = true
+                    break
+                }
             }
+            if (foundInCalls) break
         }
 
         if (posterUrl.isNullOrEmpty() || posterUrl.contains("mooncdn.")) {
@@ -2853,7 +2856,7 @@ class AnimeONProvider : MainAPI() {
                 var subtitleUrl: String? = null
 
                 if (!xorKey.isNullOrEmpty()) {
-                    val subtitleEncRegex = Regex("""subtitle\s*:\s*_0xd\s*\(\s*["']([^"']+)["']\s*\)""")
+                    val subtitleEncRegex = Regex("""(?:subtitle|rawSubtitle)\s*[:=]\s*\w+\s*\(\s*["']([A-Za-z0-9+/=]+)["']\s*\)""")
                     val subtitleEncMatch = subtitleEncRegex.find(decodedJs)?.groupValues?.get(1)
 
                     if (!subtitleEncMatch.isNullOrEmpty()) {
@@ -2883,14 +2886,14 @@ class AnimeONProvider : MainAPI() {
                         }
                     }
 
-                    val encodedRegex = Regex("""_0xd\s*\(\s*["']([^"']+)["']\s*\)""")
+                    val encodedRegex = Regex("""(\w+)\s*\(\s*["']([A-Za-z0-9+/=]+)["']\s*\)""")
                     val encMatches = encodedRegex.findAll(decodedJs).toList()
                     Log.e(TAG, "getMoonFile: encMatches=${encMatches.size}")
 
                     val allDecoded = mutableListOf<String>()
 
                     for (match in encMatches) {
-                        val decoded = moonDecrypt(match.groupValues[1], xorKey)
+                        val decoded = moonDecrypt(match.groupValues[2], xorKey)
 
                         if (decoded.isNotEmpty()) {
                             allDecoded.add(decoded)
