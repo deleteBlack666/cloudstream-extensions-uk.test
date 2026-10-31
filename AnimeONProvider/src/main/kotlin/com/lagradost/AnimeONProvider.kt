@@ -793,19 +793,25 @@ class AnimeONProvider : MainAPI() {
 
             posterUrl = Regex("""poster\s*:\s*["'](https?://[^"']+)["']""")
                 .find(decoded)?.groupValues?.get(1)
-
-            if (posterUrl != null) break
+                
+            if (posterUrl != null) {
+                Log.e(TAG, "getMoonRawPosterUrl: found via old regex: $posterUrl")
+                break
+            }
 
             val xorKey = Regex("""var\s+k\s*=\s*["']([^"']+)["']""")
                 .find(decoded)?.groupValues?.get(1) ?: continue
+            Log.e(TAG, "getMoonRawPosterUrl: xorKey=$xorKey")
 
             val callRegex = Regex("""(\w+)\s*\(\s*["']([A-Za-z0-9+/=]+)["']\s*\)""")
             var foundInCalls = false
             for (callMatch in callRegex.findAll(decoded)) {
                 val result = moonDecrypt(callMatch.groupValues[2], xorKey)
+                Log.e(TAG, "getMoonRawPosterUrl: decrypt call result=${result.take(100)}")
                 if (result.startsWith("http") && (result.contains("poster") || result.contains(".webp") || result.contains(".jpg") || result.contains(".png"))) {
                     posterUrl = result
                     foundInCalls = true
+                    Log.e(TAG, "getMoonRawPosterUrl: found via decrypt calls: $posterUrl")
                     break
                 }
             }
@@ -826,6 +832,7 @@ class AnimeONProvider : MainAPI() {
                     val finalUrl = if (extracted.startsWith("//")) "https:$extracted" else extracted
                     if (finalUrl.isNotBlank() && !finalUrl.contains("mooncdn.")) {
                         posterUrl = finalUrl
+                        Log.e(TAG, "getMoonRawPosterUrl: found via fallback pattern: $posterUrl")
                         break
                     }
                 }
