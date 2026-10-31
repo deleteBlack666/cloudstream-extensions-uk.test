@@ -1962,7 +1962,7 @@ class AnimeONProvider : MainAPI() {
 
                     if (collected.isEmpty()) {
                         val directUrl = "$mainUrl/api/player/${player.id}/${translation.translation.id}"
-                        Log.e(TAG, "loadMovieLinks: no episodes, trying direct: $directUrl"
+                        Log.e(TAG, "loadMovieLinks: no episodes, trying direct: $directUrl")
                         val directJson = fetchJsonOrNull(directUrl)
 
                         if (directJson != null) {
