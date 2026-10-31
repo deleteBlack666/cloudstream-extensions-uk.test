@@ -1,4 +1,4 @@
-package com.lagradost
+Package com.lagradost
 
 import android.util.Log
 import com.lagradost.cloudstream3.*
@@ -266,6 +266,40 @@ class AnimeONProvider : MainAPI() {
         val subtitles: List<FenixSubtitle>? = null
     )
 
+    private data class FenixPlayback(
+        val version: Int? = 1,
+        val token: String? = null,
+    )
+
+    private data class FenixPlaybackTrack(
+        val id: String? = null,
+        val label: String? = null,
+        val language: String? = null,
+        val track_type: String? = null,
+        val hls_url: String? = null,
+        val cast_avc_url: String? = null,
+        val is_default: Boolean? = null,
+        val voice_studio_id: String? = null,
+    )
+
+    private data class FenixPlaybackEpisode(
+        val id: String? = null,
+        val number: Int = 0,
+        val edition: String? = null,
+        val title: String? = null,
+        val thumbnail_url: String? = null,
+        val hls_master_url: String? = null,
+        val cast_avc_url: String? = null,
+        val video_segment_format: String? = null,
+        val tracks: List<FenixPlaybackTrack>? = null,
+        val subtitles: List<FenixSubtitle>? = null,
+    )
+
+    private data class FenixPlaybackEpisodeResponse(
+        val episode: FenixPlaybackEpisode? = null,
+        val token: String? = null,
+    )
+
     private data class FenixPlaylist(
         val anime_id: String? = null,
         val slug: String? = null,
@@ -274,13 +308,17 @@ class AnimeONProvider : MainAPI() {
         val type: String? = null,
         val default_edition: String? = null,
         val episodes: List<FenixEpisode>? = null,
-        val mini_episodes: List<FenixEpisode>? = null
+        val mini_episodes: List<FenixEpisode>? = null,
+        val playback: FenixPlayback? = null,
     )
 
     private data class FenixMediaAccess(
         val origin: String? = null,
         val token: String? = null
     )
+
+    private var lastFenixMediaAccess: FenixMediaAccess? = null
+    private var lastFenixPlaylist: FenixPlaylist? = null
 
     private fun fixMovieExtractorLink(link: ExtractorLink, sourceName: String): ExtractorLink {
         val cleanQuality = when {
@@ -898,6 +936,7 @@ class AnimeONProvider : MainAPI() {
         Log.e(TAG, "fetchFenixPlaylist: embed html len=${html.length}")
 
         val mediaAccess = extractFenixMediaAccess(html)
+        lastFenixMediaAccess = mediaAccess
         Log.e(TAG, "fetchFenixPlaylist: mediaAccess=${mediaAccess != null}")
 
         val inlineRegex = Regex("""window\.FENIX_PLAYLIST\s*=\s*(\{.*?\});""", RegexOption.DOT_MATCHES_ALL)
@@ -906,7 +945,8 @@ class AnimeONProvider : MainAPI() {
             Log.e(TAG, "fetchFenixPlaylist: found inline playlist")
             try {
                 val p = AppUtils.parseJson<FenixPlaylist>(inlineMatch.groupValues[1])
-                Log.e(TAG, "fetchFenixPlaylist: inline eps=${p.episodes?.size} mini=${p.mini_episodes?.size}")
+                lastFenixPlaylist = p
+                Log.e(TAG, "fetchFenixPlaylist: inline eps=${p.episodes?.size} mini=${p.mini_episodes?.size} playbackToken=${p.playback?.token != null}")
                 if ((p.episodes?.isNotEmpty() == true) || (p.mini_episodes?.isNotEmpty() == true)) {
                     return authorizeFenixPlaylist(p, mediaAccess)
                 }
@@ -939,7 +979,8 @@ class AnimeONProvider : MainAPI() {
             Log.e(TAG, "fetchFenixPlaylist: playlist json len=${json.length} preview=${json.take(200)}")
 
             val playlist = AppUtils.parseJson<FenixPlaylist>(json)
-            Log.e(TAG, "fetchFenixPlaylist: parsed eps=${playlist.episodes?.size} mini=${playlist.mini_episodes?.size} defaultEdition=${playlist.default_edition}")
+            lastFenixPlaylist = playlist
+            Log.e(TAG, "fetchFenixPlaylist: parsed eps=${playlist.episodes?.size} mini=${playlist.mini_episodes?.size} defaultEdition=${playlist.default_edition} playbackToken=${playlist.playback?.token != null}")
             authorizeFenixPlaylist(playlist, mediaAccess)
         } catch (e: Exception) {
             Log.e(TAG, "fetchFenixPlaylist: api error: ${e.message}")
@@ -966,6 +1007,21 @@ class AnimeONProvider : MainAPI() {
         ) ?: ""
 
         val mediaAccess = extractFenixMediaAccess(html)
+        lastFenixMediaAccess = mediaAccess
+
+        val inlineRegex = Regex("""window\.FENIX_PLAYLIST\s*=\s*(\{.*?\});""", RegexOption.DOT_MATCHES_ALL)
+        inlineRegex.find(html)?.let { m ->
+            try {
+                val p = AppUtils.parseJson<FenixPlaylist>(m.groupValues[1])
+                if ((p.episodes?.isNotEmpty() == true) || (p.mini_episodes?.isNotEmpty() == true)) {
+                    lastFenixPlaylist = p
+                    Log.e(TAG, "fetchFenixPlaylistSync: inline eps=${p.episodes?.size} playbackToken=${p.playback?.token != null}")
+                    return authorizeFenixPlaylist(p, mediaAccess)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "fetchFenixPlaylistSync: inline parse error: ${e.message}")
+            }
+        }
 
         val apiPath = if (isSignedFenixCode(code))
             "$origin/api/playlist-code/$code"
@@ -987,10 +1043,40 @@ class AnimeONProvider : MainAPI() {
 
         return try {
             val playlist = AppUtils.parseJson<FenixPlaylist>(json)
-            Log.e(TAG, "fetchFenixPlaylistSync: parsed eps=${playlist.episodes?.size} mini=${playlist.mini_episodes?.size}")
+            lastFenixPlaylist = playlist
+            Log.e(TAG, "fetchFenixPlaylistSync: api eps=${playlist.episodes?.size} playbackToken=${playlist.playback?.token != null}")
             authorizeFenixPlaylist(playlist, mediaAccess)
         } catch (e: Exception) {
             Log.e(TAG, "fetchFenixPlaylistSync parse error: ${e.message}")
+            null
+        }
+    }
+
+    private suspend fun fetchFenixEpisodePlayback(
+        slug: String,
+        playbackToken: String,
+        edition: String,
+        number: Int
+    ): FenixPlaybackEpisodeResponse? {
+        val url = "https://fenixplay.xyz/api/playback/" +
+            java.net.URLEncoder.encode(slug, "UTF-8") + "/episodes/" +
+            java.net.URLEncoder.encode(edition, "UTF-8") + "/" + number
+        Log.e(TAG, "fetchFenixEpisodePlayback: url=$url")
+        return try {
+            val response = app.get(
+                url,
+                headers = mapOf(
+                    "User-Agent" to userAgent,
+                    "X-Fenix-Playback" to playbackToken,
+                    "Accept" to "application/json, text/plain, */*",
+                    "Referer" to "https://fenixplay.xyz/"
+                ),
+                cacheTime = 0
+            ).text
+            Log.e(TAG, "fetchFenixEpisodePlayback: OK len=${response.length}")
+            AppUtils.parseJson<FenixPlaybackEpisodeResponse>(response)
+        } catch (e: Exception) {
+            Log.e(TAG, "fetchFenixEpisodePlayback error: ${e.message}")
             null
         }
     }
@@ -1014,187 +1100,6 @@ class AnimeONProvider : MainAPI() {
             (it.edition ?: "tv").equals(edition, ignoreCase = true)
         } ?: allEps.firstOrNull().also {
             Log.e(TAG, "pickFenixEpisode: fallback to first ep=${it?.number} ed=${it?.edition}")
-        }
-    }
-
-    private suspend fun processFenixEpisodeSync(
-        episode: FenixEpisode,
-        embedUrl: String,
-        sourceName: String,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit,
-        preferredTrack: String? = null
-    ) {
-        Log.e(TAG, "processFenixEpisodeSync: source=$sourceName ep=${episode.number} ed=${episode.edition}")
-        Log.e(TAG, "processFenixEpisodeSync: tracks=${episode.tracks?.size} subs=${episode.subtitles?.size} hlsMaster=${episode.hls_master_url?.take(80)}")
-
-        val fenixReferer = "https://fenixplay.xyz/"
-
-        val fenixHeaders = mapOf(
-            "User-Agent" to userAgent,
-            "Referer" to fenixReferer,
-            "Origin" to "https://fenixplay.xyz",
-            "Accept" to "*/*",
-            "Accept-Language" to "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7"
-        )
-
-        val allTrackMasters = episode.tracks
-            ?.mapNotNull { track ->
-                val url = track.hls_url
-                if (url.isNullOrBlank()) return@mapNotNull null
-                if (!url.contains("master.m3u8", ignoreCase = true)) return@mapNotNull null
-                val label = track.label ?: track.language ?: "track"
-                Triple(url, label, track.is_default == true)
-            }
-            ?: emptyList()
-
-        Log.e(TAG, "processFenixEpisodeSync: trackMasters=${allTrackMasters.map { it.second to it.third }}")
-
-        val selectedTrack: Triple<String, String, Boolean>? = run {
-            if (allTrackMasters.isEmpty()) return@run null
-
-            if (!preferredTrack.isNullOrBlank()) {
-                val exact = allTrackMasters.firstOrNull {
-                    it.second.equals(preferredTrack, ignoreCase = true)
-                }
-                if (exact != null) {
-                    Log.e(TAG, "processFenixEpisodeSync: exact preferred track=${exact.second}")
-                    return@run exact
-                }
-
-                val partial = allTrackMasters.firstOrNull {
-                    it.second.contains(preferredTrack, ignoreCase = true) ||
-                    preferredTrack.contains(it.second, ignoreCase = true)
-                }
-                if (partial != null) {
-                    Log.e(TAG, "processFenixEpisodeSync: partial preferred track=${partial.second}")
-                    return@run partial
-                }
-            }
-
-            val bySourceName = allTrackMasters.firstOrNull {
-                sourceName.contains(it.second, ignoreCase = true) ||
-                it.second.contains(sourceName.substringBefore(" ("), ignoreCase = true)
-            }
-            if (bySourceName != null) {
-                Log.e(TAG, "processFenixEpisodeSync: sourceName matched track=${bySourceName.second}")
-                return@run bySourceName
-            }
-
-            val byDefault = allTrackMasters.firstOrNull { it.third }
-            if (byDefault != null) {
-                Log.e(TAG, "processFenixEpisodeSync: default track=${byDefault.second}")
-                return@run byDefault
-            }
-
-            Log.e(TAG, "processFenixEpisodeSync: fallback first track=${allTrackMasters.first().second}")
-            allTrackMasters.first()
-        }
-
-        if (selectedTrack != null) {
-            val (url, label, _) = selectedTrack
-
-            val displayName = if (label.isNotBlank() &&
-                !sourceName.contains(label, ignoreCase = true) &&
-                !label.contains(sourceName.substringBefore(" ("), ignoreCase = true)
-            ) {
-                "$sourceName · $label"
-            } else {
-                sourceName
-            }
-
-            Log.e(TAG, "processFenixEpisodeSync: emitting track link display=$displayName url=${url.take(100)}")
-            val link = ExtractorLink(
-                source = name,
-                name = displayName,
-                url = url,
-                referer = fenixReferer,
-                quality = com.lagradost.cloudstream3.utils.Qualities.Unknown.value,
-                type = com.lagradost.cloudstream3.utils.ExtractorLinkType.M3U8,
-                headers = fenixHeaders
-            )
-            callback(link)
-        } else {
-            episode.hls_master_url?.takeIf { it.isNotBlank() }?.let { url ->
-                Log.e(TAG, "processFenixEpisodeSync: emitting hls_master url=${url.take(100)}")
-                val link = ExtractorLink(
-                    source = name,
-                    name = sourceName,
-                    url = url,
-                    referer = fenixReferer,
-                    quality = com.lagradost.cloudstream3.utils.Qualities.Unknown.value,
-                    type = com.lagradost.cloudstream3.utils.ExtractorLinkType.M3U8,
-                    headers = fenixHeaders
-                )
-                callback(link)
-            } ?: Log.e(TAG, "processFenixEpisodeSync: NO tracks and NO hls_master_url!")
-        }
-
-        ensureSubtitleProxy()
-
-        episode.subtitles?.forEach { sub ->
-            val url = sub.url ?: return@forEach
-            val lang = sub.label ?: sub.language ?: "UA"
-            Log.e(TAG, "processFenixEpisodeSync: subtitle lang=$lang url=${url.take(80)}")
-            try {
-                val bytes = app.get(
-                    url,
-                    headers = mapOf(
-                        "User-Agent" to userAgent,
-                        "Referer" to fenixReferer,
-                        "Origin" to "https://fenixplay.xyz",
-                        "Accept" to "*/*"
-                    ),
-                    cacheTime = 0
-                ).body.bytes()
-
-                if (bytes.isEmpty()) {
-                    Log.e(TAG, "processFenixEpisodeSync: empty subtitle bytes, emitting direct url")
-                    subtitleCallback.invoke(newSubtitleFile(lang, url))
-                    return@forEach
-                }
-
-                val key = java.util.UUID.randomUUID().toString().replace("-", "")
-                subtitleCache[key] = bytes
-                val proxyUrl = "http://127.0.0.1:$subtitleProxyPort/sub?$key"
-                subtitleCallback.invoke(newSubtitleFile(lang, proxyUrl))
-            } catch (e: Exception) {
-                Log.e(TAG, "processFenixEpisodeSync subtitle error: ${e.message}")
-                subtitleCallback.invoke(newSubtitleFile(lang, url))
-            }
-        }
-
-        episode.tracks?.forEach { track ->
-            val url = track.hls_url ?: return@forEach
-            if (url.contains(".vtt") || url.contains(".srt")) {
-                val lang = track.label ?: track.language ?: "UA"
-                Log.e(TAG, "processFenixEpisodeSync: track subtitle lang=$lang url=${url.take(80)}")
-                try {
-                    val bytes = app.get(
-                        url,
-                        headers = mapOf(
-                            "User-Agent" to userAgent,
-                            "Referer" to fenixReferer,
-                            "Origin" to "https://fenixplay.xyz",
-                            "Accept" to "*/*"
-                        ),
-                        cacheTime = 0
-                    ).body.bytes()
-
-                    if (bytes.isEmpty()) {
-                        subtitleCallback.invoke(newSubtitleFile(lang, url))
-                        return@forEach
-                    }
-
-                    val key = java.util.UUID.randomUUID().toString().replace("-", "")
-                    subtitleCache[key] = bytes
-                    val proxyUrl = "http://127.0.0.1:$subtitleProxyPort/sub?$key"
-                    subtitleCallback.invoke(newSubtitleFile(lang, proxyUrl))
-                } catch (e: Exception) {
-                    Log.e(TAG, "processFenixEpisodeSync track sub error: ${e.message}")
-                    subtitleCallback.invoke(newSubtitleFile(lang, url))
-                }
-            }
         }
     }
 
@@ -1765,27 +1670,112 @@ class AnimeONProvider : MainAPI() {
             try {
                 if (isFenix && videoUrl.contains("fenixplay.xyz")) {
                     Log.e(TAG, "loadLinks: FENIX branch epId=${source.episodeId}")
+
+                    if (lastFenixPlaylist == null) {
+                        fetchFenixPlaylist(videoUrl)
+                    }
+
+                    val slug = lastFenixPlaylist?.slug
+                    val playbackToken = lastFenixPlaylist?.playback?.token
+                    val epNum = fenixExtractEpisodeNumber(videoUrl) ?: source.episodeNum
+                    val edition = fenixExtractEdition(videoUrl)
+
+                    Log.e(TAG, "loadLinks: FENIX slug=$slug epNum=$epNum edition=$edition playbackToken=${!playbackToken.isNullOrEmpty()}")
+
+                    if (!slug.isNullOrEmpty() && !playbackToken.isNullOrEmpty() && epNum != null) {
+                        val details = fetchFenixEpisodePlayback(slug, playbackToken, edition, epNum)
+                        val ep = details?.episode
+
+                        if (ep != null) {
+                            Log.e(TAG, "loadLinks: FENIX tracks=${ep.tracks?.size} subs=${ep.subtitles?.size}")
+
+                            val mediaToken = lastFenixMediaAccess?.token
+                            val fenixReferer = "https://fenixplay.xyz/"
+                            val fenixHeaders2 = mapOf(
+                                "User-Agent" to userAgent,
+                                "Referer" to fenixReferer,
+                                "Origin" to "https://fenixplay.xyz",
+                                "Accept" to "*/*",
+                                "Accept-Language" to "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7"
+                            )
+
+                            fun addToken(u: String): String {
+                                if (mediaToken.isNullOrEmpty() || u.contains("token=")) return u
+                                val sep = if (u.contains("?")) "&" else "?"
+                                return "$u${sep}token=$mediaToken"
+                            }
+
+                            ep.tracks?.forEach { track ->
+                                val hlsUrl = track.hls_url
+                                if (hlsUrl.isNullOrEmpty()) return@forEach
+                                val fullUrl = addToken(hlsUrl)
+                                val label = track.label ?: track.language ?: "Fenix"
+                                val trackName = "$label · Fenix"
+                                Log.e(TAG, "loadLinks: FENIX emit track=$trackName")
+                                safeCallback(ExtractorLink(
+                                    source = name,
+                                    name = trackName,
+                                    url = fullUrl,
+                                    referer = fenixReferer,
+                                    quality = com.lagradost.cloudstream3.utils.Qualities.Unknown.value,
+                                    type = com.lagradost.cloudstream3.utils.ExtractorLinkType.M3U8,
+                                    headers = fenixHeaders2
+                                ))
+                            }
+
+                            if (ep.tracks.isNullOrEmpty() && !ep.hls_master_url.isNullOrEmpty()) {
+                                val fullUrl = addToken(ep.hls_master_url)
+                                Log.e(TAG, "loadLinks: FENIX emit master fallback")
+                                safeCallback(ExtractorLink(
+                                    source = name,
+                                    name = sourceName,
+                                    url = fullUrl,
+                                    referer = fenixReferer,
+                                    quality = com.lagradost.cloudstream3.utils.Qualities.Unknown.value,
+                                    type = com.lagradost.cloudstream3.utils.ExtractorLinkType.M3U8,
+                                    headers = fenixHeaders2
+                                ))
+                            }
+
+                            ensureSubtitleProxy()
+                            ep.subtitles?.forEach { sub ->
+                                val subUrl = sub.url ?: return@forEach
+                                val lang = sub.label ?: sub.language ?: "UA"
+                                val fullSubUrl = addToken(subUrl)
+                                try {
+                                    val bytes = app.get(
+                                        fullSubUrl,
+                                        headers = fenixHeaders2,
+                                        cacheTime = 0
+                                    ).body.bytes()
+                                    if (bytes.isEmpty()) {
+                                        subtitleCallback.invoke(newSubtitleFile(lang, fullSubUrl))
+                                        return@forEach
+                                    }
+                                    val key = java.util.UUID.randomUUID().toString().replace("-", "")
+                                    subtitleCache[key] = bytes
+                                    val proxyUrl = "http://127.0.0.1:$subtitleProxyPort/sub?$key"
+                                    subtitleCallback.invoke(newSubtitleFile(lang, proxyUrl))
+                                } catch (e: Exception) {
+                                    Log.e(TAG, "loadLinks: FENIX subtitle err: ${e.message}")
+                                    subtitleCallback.invoke(newSubtitleFile(lang, fullSubUrl))
+                                }
+                            }
+
+                            foundAny = true
+                            continue
+                        }
+                    }
+
+                    // Fallback to old fenix method if playback API fails
                     val info = getEpisodeVideoInfo(source.episodeId)
                     val preferredTrack = info?.second
-                    Log.e(TAG, "loadLinks: FENIX preferredTrack=$preferredTrack")
-
                     val playlist = fetchFenixPlaylist(videoUrl)
-                    Log.e(TAG, "loadLinks: FENIX playlist=${playlist != null}")
                     if (playlist != null) {
                         val episode = pickFenixEpisode(playlist, videoUrl)
-                        Log.e(TAG, "loadLinks: FENIX picked ep=${episode?.number} ed=${episode?.edition}")
                         if (episode != null) {
-                            processFenixEpisodeSync(
-                                episode,
-                                videoUrl,
-                                sourceName,
-                                subtitleCallback,
-                                safeCallback,
-                                preferredTrack
-                            )
+                            processFenixEpisodeSync(episode, videoUrl, sourceName, subtitleCallback, safeCallback, preferredTrack)
                             foundAny = true
-                        } else {
-                            Log.e(TAG, "loadLinks: FENIX NO episode picked!")
                         }
                     }
                     continue
@@ -1977,21 +1967,98 @@ class AnimeONProvider : MainAPI() {
 
                                     if (isFenix && finalUrl.contains("fenixplay.xyz")) {
                                         Log.e(TAG, "loadMovieLinks: FENIX direct url=${finalUrl.take(120)}")
+                                        if (lastFenixPlaylist == null) {
+                                            fetchFenixPlaylist(finalUrl)
+                                        }
+
+                                        val slug = lastFenixPlaylist?.slug
+                                        val playbackToken = lastFenixPlaylist?.playback?.token
+                                        val epNum = fenixExtractEpisodeNumber(finalUrl) ?: directSource.selection?.episode ?: 1
+                                        val edition = fenixExtractEdition(finalUrl)
+
+                                        if (!slug.isNullOrEmpty() && !playbackToken.isNullOrEmpty()) {
+                                            val details = fetchFenixEpisodePlayback(slug, playbackToken, edition, epNum)
+                                            val ep = details?.episode
+
+                                            if (ep != null) {
+                                                val mediaToken = lastFenixMediaAccess?.token
+                                                val fenixReferer = "https://fenixplay.xyz/"
+                                                val fenixHeaders2 = mapOf(
+                                                    "User-Agent" to userAgent,
+                                                    "Referer" to fenixReferer,
+                                                    "Origin" to "https://fenixplay.xyz",
+                                                    "Accept" to "*/*",
+                                                    "Accept-Language" to "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7"
+                                                )
+
+                                                fun addToken(u: String): String {
+                                                    if (mediaToken.isNullOrEmpty() || u.contains("token=")) return u
+                                                    val sep = if (u.contains("?")) "&" else "?"
+                                                    return "$u${sep}token=$mediaToken"
+                                                }
+
+                                                ep.tracks?.forEach { track ->
+                                                    val hlsUrl = track.hls_url
+                                                    if (hlsUrl.isNullOrEmpty()) return@forEach
+                                                    val fullUrl = addToken(hlsUrl)
+                                                    val label = track.label ?: track.language ?: "Fenix"
+                                                    val trackName = "$label · Fenix"
+                                                    safeCallback(ExtractorLink(
+                                                        source = name,
+                                                        name = trackName,
+                                                        url = fullUrl,
+                                                        referer = fenixReferer,
+                                                        quality = com.lagradost.cloudstream3.utils.Qualities.Unknown.value,
+                                                        type = com.lagradost.cloudstream3.utils.ExtractorLinkType.M3U8,
+                                                        headers = fenixHeaders2
+                                                    ))
+                                                }
+
+                                                if (ep.tracks.isNullOrEmpty() && !ep.hls_master_url.isNullOrEmpty()) {
+                                                    val fullUrl = addToken(ep.hls_master_url)
+                                                    safeCallback(ExtractorLink(
+                                                        source = name,
+                                                        name = sourceName,
+                                                        url = fullUrl,
+                                                        referer = fenixReferer,
+                                                        quality = com.lagradost.cloudstream3.utils.Qualities.Unknown.value,
+                                                        type = com.lagradost.cloudstream3.utils.ExtractorLinkType.M3U8,
+                                                        headers = fenixHeaders2
+                                                    ))
+                                                }
+
+                                                ensureSubtitleProxy()
+                                                ep.subtitles?.forEach { sub ->
+                                                    val subUrl = sub.url ?: return@forEach
+                                                    val lang = sub.label ?: sub.language ?: "UA"
+                                                    val fullSubUrl = addToken(subUrl)
+                                                    try {
+                                                        val bytes = app.get(fullSubUrl, headers = fenixHeaders2, cacheTime = 0).body.bytes()
+                                                        if (bytes.isEmpty()) {
+                                                            subtitleCallback.invoke(newSubtitleFile(lang, fullSubUrl))
+                                                            return@forEach
+                                                        }
+                                                        val key = java.util.UUID.randomUUID().toString().replace("-", "")
+                                                        subtitleCache[key] = bytes
+                                                        val proxyUrl = "http://127.0.0.1:$subtitleProxyPort/sub?$key"
+                                                        subtitleCallback.invoke(newSubtitleFile(lang, proxyUrl))
+                                                    } catch (_: Exception) {
+                                                        subtitleCallback.invoke(newSubtitleFile(lang, fullSubUrl))
+                                                    }
+                                                }
+
+                                                foundAny = true
+                                                continue
+                                            }
+                                        }
+
+                                        // Fallback
                                         val preferredTrack = directSource.selection?.track
                                         val playlist = fetchFenixPlaylist(finalUrl)
-                                        Log.e(TAG, "loadMovieLinks: FENIX playlist=${playlist != null}")
                                         if (playlist != null) {
                                             val episode = pickFenixEpisode(playlist, finalUrl)
-                                            Log.e(TAG, "loadMovieLinks: FENIX picked ep=${episode?.number}")
                                             if (episode != null) {
-                                                processFenixEpisodeSync(
-                                                    episode,
-                                                    finalUrl,
-                                                    sourceName,
-                                                    subtitleCallback,
-                                                    safeCallback,
-                                                    preferredTrack
-                                                )
+                                                processFenixEpisodeSync(episode, finalUrl, sourceName, subtitleCallback, safeCallback, preferredTrack)
                                                 foundAny = true
                                             }
                                         }
@@ -2070,24 +2137,99 @@ class AnimeONProvider : MainAPI() {
                         try {
                             if (isFenix && videoUrl.contains("fenixplay.xyz")) {
                                 Log.e(TAG, "loadMovieLinks: FENIX ep branch")
+                                if (lastFenixPlaylist == null) {
+                                    fetchFenixPlaylist(videoUrl)
+                                }
+
+                                val slug = lastFenixPlaylist?.slug
+                                val playbackToken = lastFenixPlaylist?.playback?.token
+                                val epNum = fenixExtractEpisodeNumber(videoUrl) ?: ep.episode
+                                val edition = fenixExtractEdition(videoUrl)
+
+                                if (!slug.isNullOrEmpty() && !playbackToken.isNullOrEmpty()) {
+                                    val details = fetchFenixEpisodePlayback(slug, playbackToken, edition, epNum)
+                                    val episodeObj = details?.episode
+
+                                    if (episodeObj != null) {
+                                        val mediaToken = lastFenixMediaAccess?.token
+                                        val fenixReferer = "https://fenixplay.xyz/"
+                                        val fenixHeaders2 = mapOf(
+                                            "User-Agent" to userAgent,
+                                            "Referer" to fenixReferer,
+                                            "Origin" to "https://fenixplay.xyz",
+                                            "Accept" to "*/*",
+                                            "Accept-Language" to "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7"
+                                        )
+
+                                        fun addToken(u: String): String {
+                                            if (mediaToken.isNullOrEmpty() || u.contains("token=")) return u
+                                            val sep = if (u.contains("?")) "&" else "?"
+                                            return "$u${sep}token=$mediaToken"
+                                        }
+
+                                        episodeObj.tracks?.forEach { track ->
+                                            val hlsUrl = track.hls_url
+                                            if (hlsUrl.isNullOrEmpty()) return@forEach
+                                            val fullUrl = addToken(hlsUrl)
+                                            val label = track.label ?: track.language ?: "Fenix"
+                                            val trackName = "$label · Fenix"
+                                            safeCallback(ExtractorLink(
+                                                source = name,
+                                                name = trackName,
+                                                url = fullUrl,
+                                                referer = fenixReferer,
+                                                quality = com.lagradost.cloudstream3.utils.Qualities.Unknown.value,
+                                                type = com.lagradost.cloudstream3.utils.ExtractorLinkType.M3U8,
+                                                headers = fenixHeaders2
+                                            ))
+                                        }
+
+                                        if (episodeObj.tracks.isNullOrEmpty() && !episodeObj.hls_master_url.isNullOrEmpty()) {
+                                            val fullUrl = addToken(episodeObj.hls_master_url)
+                                            safeCallback(ExtractorLink(
+                                                source = name,
+                                                name = sourceName,
+                                                url = fullUrl,
+                                                referer = fenixReferer,
+                                                quality = com.lagradost.cloudstream3.utils.Qualities.Unknown.value,
+                                                type = com.lagradost.cloudstream3.utils.ExtractorLinkType.M3U8,
+                                                headers = fenixHeaders2
+                                            ))
+                                        }
+
+                                        ensureSubtitleProxy()
+                                        episodeObj.subtitles?.forEach { sub ->
+                                            val subUrl = sub.url ?: return@forEach
+                                            val lang = sub.label ?: sub.language ?: "UA"
+                                            val fullSubUrl = addToken(subUrl)
+                                            try {
+                                                val bytes = app.get(fullSubUrl, headers = fenixHeaders2, cacheTime = 0).body.bytes()
+                                                if (bytes.isEmpty()) {
+                                                    subtitleCallback.invoke(newSubtitleFile(lang, fullSubUrl))
+                                                    return@forEach
+                                                }
+                                                val key = java.util.UUID.randomUUID().toString().replace("-", "")
+                                                subtitleCache[key] = bytes
+                                                val proxyUrl = "http://127.0.0.1:$subtitleProxyPort/sub?$key"
+                                                subtitleCallback.invoke(newSubtitleFile(lang, proxyUrl))
+                                            } catch (_: Exception) {
+                                                subtitleCallback.invoke(newSubtitleFile(lang, fullSubUrl))
+                                            }
+                                        }
+
+                                        foundAny = true
+                                        continue
+                                    }
+                                }
+
+                                // Fallback
                                 val info = getEpisodeVideoInfo(ep.id)
                                 val preferredTrack = info?.second
-                                Log.e(TAG, "loadMovieLinks: FENIX preferredTrack=$preferredTrack")
-
                                 val playlist = fetchFenixPlaylist(videoUrl)
-                                Log.e(TAG, "loadMovieLinks: FENIX playlist=${playlist != null}")
                                 if (playlist != null) {
                                     val episode = pickFenixEpisode(playlist, videoUrl)
-                                    Log.e(TAG, "loadMovieLinks: FENIX picked ep=${episode?.number}")
                                     if (episode != null) {
-                                        processFenixEpisodeSync(
-                                            episode,
-                                            videoUrl,
-                                            sourceName,
-                                            subtitleCallback,
-                                            safeCallback,
-                                            preferredTrack
-                                        )
+                                        processFenixEpisodeSync(episode, videoUrl, sourceName, subtitleCallback, safeCallback, preferredTrack)
                                         foundAny = true
                                     }
                                 }
