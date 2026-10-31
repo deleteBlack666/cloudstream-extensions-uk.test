@@ -31,11 +31,14 @@ class AnimeONProvider : MainAPI() {
                         .build()
                 }
                 url.contains("fenixplay.xyz") -> {
-                    request.newBuilder()
+                    val builder = request.newBuilder()
                         .header("Referer", "https://fenixplay.xyz/")
                         .header("Origin", "https://fenixplay.xyz")
                         .header("User-Agent", userAgent)
-                        .build()
+
+                    fenixMediaCookie?.let { builder.header("Cookie", "fenix_media=$it") }
+
+                    builder.build()
                 }
                 else -> request
             }
@@ -59,6 +62,7 @@ class AnimeONProvider : MainAPI() {
     private var posterProxyPort: Int = 0
     private val posterCache = java.util.concurrent.ConcurrentHashMap<String, ByteArray>()
     private var moonCookieHeader: String? = null
+    private var fenixMediaCookie: String? = null
 
     private val episodePosterCache = java.util.concurrent.ConcurrentHashMap<String, String>()
 
@@ -274,8 +278,6 @@ class AnimeONProvider : MainAPI() {
         val mini_episodes: List<FenixEpisode>? = null
     )
 
-    // ==== NEW: playback API (/api/playback/{slug}/episodes/{edition}/{ep}) ====
-
     private data class FenixPlaybackTrack(
         val id: String? = null,
         val label: String? = null,
@@ -297,11 +299,7 @@ class AnimeONProvider : MainAPI() {
         val hls_master_url: String? = null,
         val thumbnail_url: String? = null,
         val tracks: List<FenixPlaybackTrack>? = null,
-        val subtitles: List<FenixSubtitle>? = null,
-        val intro_start: Double? = null,
-        val intro_end: Double? = null,
-        val ending_start: Double? = null,
-        val ending_end: Double? = null
+        val subtitles: List<FenixSubtitle>? = null
     )
 
     private data class FenixPlaybackResponse(
@@ -523,6 +521,7 @@ class AnimeONProvider : MainAPI() {
                 originalUrl.contains("fenixplay.xyz") -> {
                     requestBuilder.header("Referer", "https://fenixplay.xyz/")
                     requestBuilder.header("Origin", "https://fenixplay.xyz")
+                    fenixMediaCookie?.let { requestBuilder.header("Cookie", "fenix_media=$it") }
                 }
             }
 
@@ -855,7 +854,56 @@ class AnimeONProvider : MainAPI() {
         )
     }
 
-    // ==== NEW: fetch playback tracks for a specific episode ====
+    private fun buildFenixVideoCandidates(thumbUrl: String, mediaAccess: FenixMediaAccess?): List<String> {
+        val candidates = mutableListOf<String>()
+
+        val thumbUri = try {
+            java.net.URI(thumbUrl)
+        } catch (e: Exception) {
+            return emptyList()
+        }
+
+        val thumbOrigin = "${thumbUri.scheme}://${thumbUri.host}"
+        val thumbPath = thumbUri.path
+
+        if (!thumbPath.endsWith("/thumb.jpg")) return emptyList()
+
+        val dirPath = thumbPath.removeSuffix("/thumb.jpg")
+        val parentDir = dirPath.substringBeforeLast("/", "")
+
+        val mainToken = mediaAccess?.token
+        val edgeOrigin = mediaAccess?.edge?.origin
+        val edgeToken = mediaAccess?.edge?.token
+        val cacheOrigins = mediaAccess?.cache?.origins ?: emptyList()
+
+        val filenames = listOf("master.m3u8", "index.m3u8", "playlist.m3u8", "video.m3u8")
+
+        fun addUrl(origin: String, path: String, tok: String?) {
+            if (path.isBlank()) return
+            val base = "$origin$path"
+            if (!tok.isNullOrBlank()) {
+                candidates.add("$base?token=$tok")
+            }
+            candidates.add(base)
+        }
+
+        for (fn in filenames) addUrl(thumbOrigin, "$dirPath/$fn", mainToken)
+
+        if (parentDir.isNotBlank() && parentDir != dirPath) {
+            for (fn in filenames) addUrl(thumbOrigin, "$parentDir/$fn", mainToken)
+        }
+
+        if (!edgeOrigin.isNullOrBlank() && !edgeToken.isNullOrBlank()) {
+            for (fn in filenames) addUrl(edgeOrigin, "$dirPath/$fn", edgeToken)
+        }
+
+        for (origin in cacheOrigins) {
+            if (origin == thumbOrigin) continue
+            for (fn in filenames) addUrl(origin, "$dirPath/$fn", mainToken)
+        }
+
+        return candidates
+    }
 
     private suspend fun fetchFenixEpisodePlayback(
         slug: String,
@@ -868,7 +916,7 @@ class AnimeONProvider : MainAPI() {
         val url = "https://fenixplay.xyz/api/playback/$slug/episodes/$edition/$epNum"
 
         return try {
-            val json = app.get(
+            val response = app.get(
                 url,
                 headers = mapOf(
                     "User-Agent" to userAgent,
@@ -877,9 +925,11 @@ class AnimeONProvider : MainAPI() {
                     "Accept" to "application/json, */*"
                 ),
                 cacheTime = 0
-            ).text
+            )
 
-            val parsed = AppUtils.parseJson<FenixPlaybackResponse>(json)
+            fenixMediaCookie = response.cookies["fenix_media"] ?: fenixMediaCookie
+
+            val parsed = AppUtils.parseJson<FenixPlaybackResponse>(response.text)
             if (parsed?.episode != null) {
                 fenixPlaybackCache[key] = parsed
             }
@@ -893,7 +943,7 @@ class AnimeONProvider : MainAPI() {
         val code = fenixExtractCode(embedUrl) ?: return null
         val origin = fenixOrigin(embedUrl)
 
-        val html = try {
+        val response = try {
             app.get(
                 embedUrl,
                 headers = mapOf(
@@ -903,10 +953,14 @@ class AnimeONProvider : MainAPI() {
                     "Accept-Language" to "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7"
                 ),
                 cacheTime = 0
-            ).text
+            )
         } catch (e: Exception) {
-            ""
+            null
         }
+
+        val html = response?.text ?: ""
+
+        response?.cookies?.get("fenix_media")?.let { fenixMediaCookie = it }
 
         val mediaAccess = extractFenixMediaAccess(html)
 
@@ -1011,29 +1065,28 @@ class AnimeONProvider : MainAPI() {
     ) {
         val fenixReferer = "https://fenixplay.xyz/"
 
-        val fenixHeaders = mapOf(
+        val fenixHeadersBase = mutableMapOf(
             "User-Agent" to userAgent,
             "Referer" to fenixReferer,
             "Origin" to "https://fenixplay.xyz",
             "Accept" to "*/*",
             "Accept-Language" to "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7"
         )
+        fenixMediaCookie?.let { fenixHeadersBase["Cookie"] = "fenix_media=$it" }
+        val fenixHeaders: Map<String, String> = fenixHeadersBase
 
-        // -------- Enrich with /api/playback if tracks absent --------
         var effectiveTracks = episode.tracks
         var effectiveSubtitles = episode.subtitles
         var effectiveMasterUrl = episode.hls_master_url
 
         if (effectiveTracks.isNullOrEmpty()) {
-            val effectiveSlug = slug
-                ?: episode.thumbnail_url?.let { deriveSlugFromThumb(it) }
+            val effectiveSlug = slug ?: episode.thumbnail_url?.let { deriveSlugFromThumb(it) }
 
             if (!effectiveSlug.isNullOrBlank()) {
                 val edition = fenixExtractEdition(embedUrl)
-                val epNum = episode.number.takeIf { it > 0 }
-                    ?: fenixExtractEpisodeNumber(embedUrl)
+                val epNum = episode.number.takeIf { it > 0 } ?: fenixExtractEpisodeNumber(embedUrl)
 
-                if (epNum != null) {
+                if (epNum != null && epNum > 0) {
                     val playback = fetchFenixEpisodePlayback(effectiveSlug, edition, epNum)
                     if (playback?.episode != null) {
                         effectiveTracks = playback.episode.tracks?.map { t ->
@@ -1058,16 +1111,27 @@ class AnimeONProvider : MainAPI() {
             }
         }
 
-        // -------- Pick the right track --------
-        val allTrackMasters = effectiveTracks
-            ?.mapNotNull { track ->
-                val url = track.hls_url
-                if (url.isNullOrBlank()) return@mapNotNull null
-                if (!url.contains("master.m3u8", ignoreCase = true)) return@mapNotNull null
-                val label = track.label ?: track.language ?: "track"
-                Triple(url, label, track.is_default == true)
+        if (effectiveTracks.isNullOrEmpty() && !episode.thumbnail_url.isNullOrBlank()) {
+            val candidates = buildFenixVideoCandidates(episode.thumbnail_url, mediaAccess)
+            for (url in candidates) {
+                try {
+                    val resp = app.get(url, headers = fenixHeaders, cacheTime = 0)
+                    if (resp.code == 200 && resp.text.trimStart().startsWith("#EXTM3U")) {
+                        effectiveMasterUrl = url
+                        break
+                    }
+                } catch (e: Exception) {
+                }
             }
-            ?: emptyList()
+        }
+
+        val allTrackMasters = effectiveTracks?.mapNotNull { track ->
+            val url = track.hls_url
+            if (url.isNullOrBlank()) return@mapNotNull null
+            if (!url.contains("master.m3u8", ignoreCase = true)) return@mapNotNull null
+            val label = track.label ?: track.language ?: "track"
+            Triple(url, label, track.is_default == true)
+        } ?: emptyList()
 
         val selectedTrack: Triple<String, String, Boolean>? = run {
             if (allTrackMasters.isEmpty()) return@run null
@@ -1100,7 +1164,6 @@ class AnimeONProvider : MainAPI() {
 
         if (selectedTrack != null) {
             val (url, label, _) = selectedTrack
-
             val srcClean = sourceName.substringBefore(" (")
             val displayName = if (label.isNotBlank() &&
                 !srcClean.contains(label, ignoreCase = true) &&
@@ -1111,7 +1174,7 @@ class AnimeONProvider : MainAPI() {
                 sourceName
             }
 
-            val link = ExtractorLink(
+            callback(ExtractorLink(
                 source = name,
                 name = displayName,
                 url = url,
@@ -1119,11 +1182,9 @@ class AnimeONProvider : MainAPI() {
                 quality = com.lagradost.cloudstream3.utils.Qualities.Unknown.value,
                 type = com.lagradost.cloudstream3.utils.ExtractorLinkType.M3U8,
                 headers = fenixHeaders
-            )
-            callback(link)
+            ))
         } else if (!effectiveMasterUrl.isNullOrBlank()) {
-            // Fallback: лише master (зазвичай оригінал — японська)
-            val link = ExtractorLink(
+            callback(ExtractorLink(
                 source = name,
                 name = sourceName,
                 url = effectiveMasterUrl,
@@ -1131,11 +1192,9 @@ class AnimeONProvider : MainAPI() {
                 quality = com.lagradost.cloudstream3.utils.Qualities.Unknown.value,
                 type = com.lagradost.cloudstream3.utils.ExtractorLinkType.M3U8,
                 headers = fenixHeaders
-            )
-            callback(link)
+            ))
         }
 
-        // -------- Subtitles --------
         ensureSubtitleProxy()
 
         effectiveSubtitles?.forEach { sub ->
@@ -1149,7 +1208,7 @@ class AnimeONProvider : MainAPI() {
                         "Referer" to fenixReferer,
                         "Origin" to "https://fenixplay.xyz",
                         "Accept" to "*/*"
-                    ),
+                    ) + (fenixMediaCookie?.let { mapOf("Cookie" to "fenix_media=$it") } ?: emptyMap()),
                     cacheTime = 0
                 ).body.bytes()
 
@@ -1179,7 +1238,7 @@ class AnimeONProvider : MainAPI() {
                             "Referer" to fenixReferer,
                             "Origin" to "https://fenixplay.xyz",
                             "Accept" to "*/*"
-                        ),
+                        ) + (fenixMediaCookie?.let { mapOf("Cookie" to "fenix_media=$it") } ?: emptyMap()),
                         cacheTime = 0
                     ).body.bytes()
 
