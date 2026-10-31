@@ -30,7 +30,7 @@ class AnimeONProvider : MainAPI() {
                         .header("User-Agent", userAgent)
                         .build()
                 }
-                url.contains("fenixplay.xyz") || url.contains("cdn.fenixplay.xyz") -> {
+                url.contains("fenixplay.xyz") -> {
                     request.newBuilder()
                         .header("Referer", "https://fenixplay.xyz/")
                         .header("Origin", "https://fenixplay.xyz")
@@ -273,6 +273,43 @@ class AnimeONProvider : MainAPI() {
         val episodes: List<FenixEpisode>? = null,
         val mini_episodes: List<FenixEpisode>? = null
     )
+
+    // ==== NEW: playback API (/api/playback/{slug}/episodes/{edition}/{ep}) ====
+
+    private data class FenixPlaybackTrack(
+        val id: String? = null,
+        val label: String? = null,
+        val language: String? = null,
+        val track_type: String? = null,
+        val hls_url: String? = null,
+        val cast_avc_url: String? = null,
+        val is_default: Boolean? = null,
+        val voice_studio_id: String? = null,
+        val vod_url: String? = null
+    )
+
+    private data class FenixPlaybackEpisode(
+        val id: String? = null,
+        val number: Int = 0,
+        val edition: String? = null,
+        val edition_label: String? = null,
+        val title: String? = null,
+        val hls_master_url: String? = null,
+        val thumbnail_url: String? = null,
+        val tracks: List<FenixPlaybackTrack>? = null,
+        val subtitles: List<FenixSubtitle>? = null,
+        val intro_start: Double? = null,
+        val intro_end: Double? = null,
+        val ending_start: Double? = null,
+        val ending_end: Double? = null
+    )
+
+    private data class FenixPlaybackResponse(
+        val episode: FenixPlaybackEpisode? = null,
+        val token: String? = null
+    )
+
+    private val fenixPlaybackCache = java.util.concurrent.ConcurrentHashMap<String, FenixPlaybackResponse>()
 
     private data class FenixEdge(
         val origin: String? = null,
@@ -758,6 +795,11 @@ class AnimeONProvider : MainAPI() {
         }
     }
 
+    private fun deriveSlugFromThumb(thumbUrl: String): String? {
+        val m = Regex("""/anime/([^/]+)/ep\d+/""").find(thumbUrl) ?: return null
+        return m.groupValues[1]
+    }
+
     private fun extractFenixMediaAccess(html: String): FenixMediaAccess? {
         val regex = Regex(
             """window\.FENIX_MEDIA_ACCESS\s*=\s*(\{.*?\});""",
@@ -811,6 +853,40 @@ class AnimeONProvider : MainAPI() {
             episodes = playlist.episodes?.map { ep(it) },
             mini_episodes = playlist.mini_episodes?.map { ep(it) }
         )
+    }
+
+    // ==== NEW: fetch playback tracks for a specific episode ====
+
+    private suspend fun fetchFenixEpisodePlayback(
+        slug: String,
+        edition: String,
+        epNum: Int
+    ): FenixPlaybackResponse? {
+        val key = "$slug|$edition|$epNum"
+        fenixPlaybackCache[key]?.let { return it }
+
+        val url = "https://fenixplay.xyz/api/playback/$slug/episodes/$edition/$epNum"
+
+        return try {
+            val json = app.get(
+                url,
+                headers = mapOf(
+                    "User-Agent" to userAgent,
+                    "Referer" to "https://fenixplay.xyz/",
+                    "Origin" to "https://fenixplay.xyz",
+                    "Accept" to "application/json, */*"
+                ),
+                cacheTime = 0
+            ).text
+
+            val parsed = AppUtils.parseJson<FenixPlaybackResponse>(json)
+            if (parsed?.episode != null) {
+                fenixPlaybackCache[key] = parsed
+            }
+            parsed
+        } catch (e: Exception) {
+            null
+        }
     }
 
     private suspend fun fetchFenixPlaylist(embedUrl: String): FenixPlaylistResult? {
@@ -923,66 +999,6 @@ class AnimeONProvider : MainAPI() {
         } ?: allEps.firstOrNull()
     }
 
-    /**
-     * Новa схема Fenix: плейлист більше не містить hls_master_url/tracks,
-     * лише thumbnail_url. Формуємо кандидатів на master.m3u8 з токеном
-     * з FENIX_MEDIA_ACCESS.
-     */
-    private fun buildFenixVideoCandidates(thumbUrl: String, mediaAccess: FenixMediaAccess?): List<String> {
-        val candidates = mutableListOf<String>()
-
-        val thumbUri = try {
-            java.net.URI(thumbUrl)
-        } catch (e: Exception) {
-            return emptyList()
-        }
-
-        val thumbOrigin = "${thumbUri.scheme}://${thumbUri.host}"
-        val thumbPath = thumbUri.path
-
-        if (!thumbPath.endsWith("/thumb.jpg")) return emptyList()
-
-        val dirPath = thumbPath.removeSuffix("/thumb.jpg")
-        val parentDir = dirPath.substringBeforeLast("/", "")
-
-        val mainToken = mediaAccess?.token
-        val edgeOrigin = mediaAccess?.edge?.origin
-        val edgeToken = mediaAccess?.edge?.token
-        val cacheOrigins = mediaAccess?.cache?.origins ?: emptyList()
-
-        val filenames = listOf("master.m3u8", "index.m3u8", "playlist.m3u8", "video.m3u8")
-
-        fun addUrl(origin: String, path: String, tok: String?) {
-            if (path.isBlank()) return
-            val base = "$origin$path"
-            if (!tok.isNullOrBlank()) {
-                candidates.add("$base?token=$tok")
-            }
-            candidates.add(base)
-        }
-
-        // 1. Основний origin + каталог thumb
-        for (fn in filenames) addUrl(thumbOrigin, "$dirPath/$fn", mainToken)
-
-        // 2. На рівень вище (на випадок, якщо m3u8 лежить біля папки video/)
-        if (parentDir.isNotBlank() && parentDir != dirPath) {
-            for (fn in filenames) addUrl(thumbOrigin, "$parentDir/$fn", mainToken)
-        }
-
-        // 3. Edge origin
-        if (!edgeOrigin.isNullOrBlank() && !edgeToken.isNullOrBlank()) {
-            for (fn in filenames) addUrl(edgeOrigin, "$dirPath/$fn", edgeToken)
-        }
-
-        // 4. Cache origins
-        for (origin in cacheOrigins) {
-            if (origin == thumbOrigin) continue
-            for (fn in filenames) addUrl(origin, "$dirPath/$fn", mainToken)
-        }
-
-        return candidates
-    }
-
     private suspend fun processFenixEpisodeSync(
         episode: FenixEpisode,
         embedUrl: String,
@@ -990,7 +1006,8 @@ class AnimeONProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit,
         mediaAccess: FenixMediaAccess? = null,
-        preferredTrack: String? = null
+        preferredTrack: String? = null,
+        slug: String? = null
     ) {
         val fenixReferer = "https://fenixplay.xyz/"
 
@@ -1002,8 +1019,47 @@ class AnimeONProvider : MainAPI() {
             "Accept-Language" to "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7"
         )
 
-        // ---- Старий формат: tracks / hls_master_url ----
-        val allTrackMasters = episode.tracks
+        // -------- Enrich with /api/playback if tracks absent --------
+        var effectiveTracks = episode.tracks
+        var effectiveSubtitles = episode.subtitles
+        var effectiveMasterUrl = episode.hls_master_url
+
+        if (effectiveTracks.isNullOrEmpty()) {
+            val effectiveSlug = slug
+                ?: episode.thumbnail_url?.let { deriveSlugFromThumb(it) }
+
+            if (!effectiveSlug.isNullOrBlank()) {
+                val edition = fenixExtractEdition(embedUrl)
+                val epNum = episode.number.takeIf { it > 0 }
+                    ?: fenixExtractEpisodeNumber(embedUrl)
+
+                if (epNum != null) {
+                    val playback = fetchFenixEpisodePlayback(effectiveSlug, edition, epNum)
+                    if (playback?.episode != null) {
+                        effectiveTracks = playback.episode.tracks?.map { t ->
+                            FenixTrack(
+                                id = t.id,
+                                label = t.label,
+                                language = t.language,
+                                track_type = t.track_type,
+                                hls_url = t.hls_url,
+                                cast_avc_url = t.cast_avc_url,
+                                is_default = t.is_default
+                            )
+                        }
+                        if (!playback.episode.subtitles.isNullOrEmpty()) {
+                            effectiveSubtitles = playback.episode.subtitles
+                        }
+                        if (!playback.episode.hls_master_url.isNullOrBlank()) {
+                            effectiveMasterUrl = playback.episode.hls_master_url
+                        }
+                    }
+                }
+            }
+        }
+
+        // -------- Pick the right track --------
+        val allTrackMasters = effectiveTracks
             ?.mapNotNull { track ->
                 val url = track.hls_url
                 if (url.isNullOrBlank()) return@mapNotNull null
@@ -1029,9 +1085,10 @@ class AnimeONProvider : MainAPI() {
                 if (partial != null) return@run partial
             }
 
+            val srcClean = sourceName.substringBefore(" (")
             val bySourceName = allTrackMasters.firstOrNull {
-                sourceName.contains(it.second, ignoreCase = true) ||
-                it.second.contains(sourceName.substringBefore(" ("), ignoreCase = true)
+                srcClean.contains(it.second, ignoreCase = true) ||
+                it.second.contains(srcClean, ignoreCase = true)
             }
             if (bySourceName != null) return@run bySourceName
 
@@ -1044,9 +1101,10 @@ class AnimeONProvider : MainAPI() {
         if (selectedTrack != null) {
             val (url, label, _) = selectedTrack
 
+            val srcClean = sourceName.substringBefore(" (")
             val displayName = if (label.isNotBlank() &&
-                !sourceName.contains(label, ignoreCase = true) &&
-                !label.contains(sourceName.substringBefore(" ("), ignoreCase = true)
+                !srcClean.contains(label, ignoreCase = true) &&
+                !label.contains(srcClean, ignoreCase = true)
             ) {
                 "$sourceName · $label"
             } else {
@@ -1063,51 +1121,24 @@ class AnimeONProvider : MainAPI() {
                 headers = fenixHeaders
             )
             callback(link)
-        } else if (!episode.hls_master_url.isNullOrBlank()) {
+        } else if (!effectiveMasterUrl.isNullOrBlank()) {
+            // Fallback: лише master (зазвичай оригінал — японська)
             val link = ExtractorLink(
                 source = name,
                 name = sourceName,
-                url = episode.hls_master_url,
+                url = effectiveMasterUrl,
                 referer = fenixReferer,
                 quality = com.lagradost.cloudstream3.utils.Qualities.Unknown.value,
                 type = com.lagradost.cloudstream3.utils.ExtractorLinkType.M3U8,
                 headers = fenixHeaders
             )
             callback(link)
-        } else {
-            // ---- Новий формат: формуємо URL з thumbnail_url + токен ----
-            val thumb = episode.thumbnail_url
-            if (!thumb.isNullOrBlank()) {
-                val candidates = buildFenixVideoCandidates(thumb, mediaAccess)
-                for (url in candidates) {
-                    try {
-                        val resp = app.get(url, headers = fenixHeaders, cacheTime = 0)
-                        if (resp.code == 200) {
-                            val text = resp.text.trimStart()
-                            if (text.startsWith("#EXTM3U")) {
-                                val link = ExtractorLink(
-                                    source = name,
-                                    name = sourceName,
-                                    url = url,
-                                    referer = fenixReferer,
-                                    quality = com.lagradost.cloudstream3.utils.Qualities.Unknown.value,
-                                    type = com.lagradost.cloudstream3.utils.ExtractorLinkType.M3U8,
-                                    headers = fenixHeaders
-                                )
-                                callback(link)
-                                break
-                            }
-                        }
-                    } catch (e: Exception) {
-                    }
-                }
-            }
         }
 
-        // ---- Субтитри (лише старий формат) ----
+        // -------- Subtitles --------
         ensureSubtitleProxy()
 
-        episode.subtitles?.forEach { sub ->
+        effectiveSubtitles?.forEach { sub ->
             val url = sub.url ?: return@forEach
             val lang = sub.label ?: sub.language ?: "UA"
             try {
@@ -1136,7 +1167,7 @@ class AnimeONProvider : MainAPI() {
             }
         }
 
-        episode.tracks?.forEach { track ->
+        effectiveTracks?.forEach { track ->
             val url = track.hls_url ?: return@forEach
             if (url.contains(".vtt") || url.contains(".srt")) {
                 val lang = track.label ?: track.language ?: "UA"
@@ -1646,7 +1677,8 @@ class AnimeONProvider : MainAPI() {
                                 subtitleCallback,
                                 safeCallback,
                                 playlistResult.mediaAccess,
-                                preferredTrack
+                                preferredTrack,
+                                playlistResult.playlist.slug
                             )
                             foundAny = true
                         }
@@ -1822,7 +1854,8 @@ class AnimeONProvider : MainAPI() {
                                                     subtitleCallback,
                                                     safeCallback,
                                                     playlistResult.mediaAccess,
-                                                    preferredTrack
+                                                    preferredTrack,
+                                                    playlistResult.playlist.slug
                                                 )
                                                 foundAny = true
                                             }
@@ -1910,7 +1943,8 @@ class AnimeONProvider : MainAPI() {
                                             subtitleCallback,
                                             safeCallback,
                                             playlistResult.mediaAccess,
-                                            preferredTrack
+                                            preferredTrack,
+                                            playlistResult.playlist.slug
                                         )
                                         foundAny = true
                                     }
