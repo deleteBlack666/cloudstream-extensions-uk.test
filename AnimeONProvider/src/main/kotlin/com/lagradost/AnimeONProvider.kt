@@ -67,10 +67,19 @@ class AnimeONProvider : MainAPI() {
 
     private val episodePosterCache = java.util.concurrent.ConcurrentHashMap<String, String>()
 
-    private data class PosterFetchTask(val episodeId: Int, val animeId: Int)
+    private data class PosterFetchTask(
+        val episodeIds: List<Int>,
+        val animeId: Int,
+        val epNum: Int
+    )
+
     private val posterFetchTasks = java.util.concurrent.ConcurrentHashMap<String, PosterFetchTask>()
 
-    private data class CollectedEpisodes(val translationName: String, val playerName: String, val episodes: List<FundubEpisode>)
+    private data class CollectedEpisodes(
+        val translationName: String,
+        val playerName: String,
+        val episodes: List<FundubEpisode>
+    )
 
     private val posterHttpClient = okhttp3.OkHttpClient.Builder()
         .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
@@ -348,10 +357,10 @@ class AnimeONProvider : MainAPI() {
 
     private fun escapeJson(str: String): String {
         return str.replace("\\", "\\\\")
-                  .replace("\"", "\\\"")
-                  .replace("\n", "\\n")
-                  .replace("\r", "\\r")
-                  .replace("\t", "\\t")
+            .replace("\"", "\\\"")
+            .replace("\n", "\\n")
+            .replace("\r", "\\r")
+            .replace("\t", "\\t")
     }
 
     private fun buildEpisodeDataJson(sources: List<EpisodeSource>): String {
@@ -396,11 +405,24 @@ class AnimeONProvider : MainAPI() {
                             if (body == null) {
                                 val task = posterFetchTasks[key]
                                 if (task != null) {
-                                    Log.e(TAG, "posterProxy: fetching ep=${task.episodeId} anime=${task.animeId}")
-                                    body = fetchEpisodePosterBytes(task.episodeId)
+                                    Log.e(
+                                        TAG,
+                                        "posterProxy: fetching anime=${task.animeId} epNum=${task.epNum} candidates=${task.episodeIds}"
+                                    )
+                                    body = fetchEpisodePosterBytes(task.episodeIds)
                                     if (body != null && body.isNotEmpty()) {
                                         posterCache[key] = body
-                                        episodePosterCache["${task.animeId}:${task.episodeId}"] = "http://127.0.0.1:$posterProxyPort/poster?$key"
+                                        episodePosterCache["${task.animeId}:${task.epNum}"] =
+                                            "http://127.0.0.1:$posterProxyPort/poster?$key"
+                                        Log.e(
+                                            TAG,
+                                            "posterProxy: cached poster anime=${task.animeId} epNum=${task.epNum} bytes=${body.size}"
+                                        )
+                                    } else {
+                                        Log.e(
+                                            TAG,
+                                            "posterProxy: no poster after all attempts anime=${task.animeId} epNum=${task.epNum}"
+                                        )
                                     }
                                 }
                             }
@@ -507,7 +529,10 @@ class AnimeONProvider : MainAPI() {
                 originalUrl.contains("ashdi.vip") -> {
                     requestBuilder.header("Referer", "https://ashdi.vip/")
                     requestBuilder.header("Origin", "https://ashdi.vip")
-                    requestBuilder.header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
+                    requestBuilder.header(
+                        "Accept",
+                        "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
+                    )
                     requestBuilder.header("Sec-Fetch-Dest", "document")
                     requestBuilder.header("Sec-Fetch-Mode", "navigate")
                     requestBuilder.header("Sec-Fetch-Site", "none")
@@ -793,7 +818,7 @@ class AnimeONProvider : MainAPI() {
 
             posterUrl = Regex("""poster\s*:\s*["'](https?://[^"']+)["']""")
                 .find(decoded)?.groupValues?.get(1)
-                
+
             if (posterUrl != null) {
                 Log.e(TAG, "getMoonRawPosterUrl: found via old regex: $posterUrl")
                 break
@@ -1313,37 +1338,82 @@ class AnimeONProvider : MainAPI() {
         }
     }
 
-    private fun fetchEpisodePosterBytes(episodeId: Int): ByteArray? {
-        Log.e(TAG, "fetchEpisodePosterBytes: epId=$episodeId")
+    private fun fetchEpisodePosterBytes(episodeIds: List<Int>): ByteArray? {
+        Log.e(TAG, "fetchEpisodePosterBytes: starting with ${episodeIds.size} candidate(s) ids=$episodeIds")
+
+        if (episodeIds.isEmpty()) {
+            Log.e(TAG, "fetchEpisodePosterBytes: empty ids list")
+            return null
+        }
+
+        for ((index, episodeId) in episodeIds.withIndex()) {
+            Log.e(TAG, "fetchEpisodePosterBytes: attempt ${index + 1}/${episodeIds.size} epId=$episodeId")
+            val bytes = fetchSingleEpisodePosterBytes(episodeId)
+            if (bytes != null && bytes.isNotEmpty()) {
+                Log.e(TAG, "fetchEpisodePosterBytes: SUCCESS epId=$episodeId bytes=${bytes.size}")
+                return bytes
+            }
+            Log.e(TAG, "fetchEpisodePosterBytes: attempt epId=$episodeId FAILED, will try next if any")
+        }
+
+        Log.e(TAG, "fetchEpisodePosterBytes: all ${episodeIds.size} attempts failed ids=$episodeIds")
+        return null
+    }
+
+    private fun fetchSingleEpisodePosterBytes(episodeId: Int): ByteArray? {
+        Log.e(TAG, "fetchSingleEpisodePosterBytes: epId=$episodeId")
         val videoUrl = fetchEpisodeVideoUrlSync(episodeId) ?: run {
-            Log.e(TAG, "fetchEpisodePosterBytes: no videoUrl")
+            Log.e(TAG, "fetchSingleEpisodePosterBytes: no videoUrl for epId=$episodeId")
             return null
         }
 
         if (videoUrl.contains("fenixplay.xyz")) {
-            Log.e(TAG, "fetchEpisodePosterBytes: fenix branch")
+            Log.e(TAG, "fetchSingleEpisodePosterBytes: fenix branch epId=$episodeId")
             val playlist = fetchFenixPlaylistSync(videoUrl)
             val episode = playlist?.let { pickFenixEpisode(it, videoUrl) }
             val thumb = episode?.thumbnail_url
-            Log.e(TAG, "fetchEpisodePosterBytes: fenix thumb=$thumb")
+            Log.e(TAG, "fetchSingleEpisodePosterBytes: fenix thumb=$thumb epId=$episodeId")
             if (!thumb.isNullOrBlank()) {
                 val bytes = fetchPosterBytes(thumb)
-                if (bytes.isNotEmpty()) return bytes
+                if (bytes.isNotEmpty()) {
+                    Log.e(TAG, "fetchSingleEpisodePosterBytes: fenix poster OK bytes=${bytes.size} epId=$episodeId")
+                    return bytes
+                }
+                Log.e(TAG, "fetchSingleEpisodePosterBytes: fenix poster empty bytes epId=$episodeId")
+            } else {
+                Log.e(TAG, "fetchSingleEpisodePosterBytes: fenix no thumbnail epId=$episodeId")
             }
             return null
         }
 
         val rawPosterUrl = when {
-            videoUrl.contains("ashdi.vip") -> getAshdiRawPosterUrl(videoUrl)
-            videoUrl.contains("moonanime.net") -> getMoonRawPosterUrl(videoUrl)
-            else -> null
+            videoUrl.contains("ashdi.vip") -> {
+                Log.e(TAG, "fetchSingleEpisodePosterBytes: Ashdi branch epId=$episodeId")
+                getAshdiRawPosterUrl(videoUrl)
+            }
+            videoUrl.contains("moonanime.net") -> {
+                Log.e(TAG, "fetchSingleEpisodePosterBytes: Moon branch epId=$episodeId")
+                getMoonRawPosterUrl(videoUrl)
+            }
+            else -> {
+                Log.e(TAG, "fetchSingleEpisodePosterBytes: unknown player domain epId=$episodeId videoUrl=$videoUrl")
+                null
+            }
         } ?: run {
-            Log.e(TAG, "fetchEpisodePosterBytes: no rawPosterUrl for $videoUrl")
+            Log.e(TAG, "fetchSingleEpisodePosterBytes: no rawPosterUrl extracted epId=$episodeId videoUrl=$videoUrl")
             return null
         }
-        Log.e(TAG, "fetchEpisodePosterBytes: rawPosterUrl=$rawPosterUrl")
 
-        return fetchPosterBytes(rawPosterUrl).takeIf { it.isNotEmpty() }
+        Log.e(TAG, "fetchSingleEpisodePosterBytes: rawPosterUrl=$rawPosterUrl epId=$episodeId")
+
+        val bytes = fetchPosterBytes(rawPosterUrl)
+        if (bytes.isEmpty()) {
+            Log.e(TAG, "fetchSingleEpisodePosterBytes: empty image bytes epId=$episodeId url=$rawPosterUrl")
+            return null
+        }
+
+        Log.e(TAG, "fetchSingleEpisodePosterBytes: got ${bytes.size} bytes epId=$episodeId")
+        return bytes
     }
 
     private suspend fun resolveMoonContent(contentUrl: String): String? {
@@ -1711,32 +1781,58 @@ class AnimeONProvider : MainAPI() {
                         s.apiPoster?.takeIf { it.isNotEmpty() && !it.contains("mooncdn.") }
                     }
 
-                    if (epPoster == null) {
+                    if (epPoster != null) {
+                        Log.e(TAG, "load: ep=$epNum using apiPoster=$epPoster")
+                    } else {
                         val cachedPoster = episodePosterCache["$animeId:$epNum"]
                         if (cachedPoster != null && !cachedPoster.contains("mooncdn.")) {
                             epPoster = cachedPoster
-                            Log.e(TAG, "load: using cached poster ep=$epNum")
+                            Log.e(TAG, "load: using cached poster ep=$epNum url=$cachedPoster")
                         } else {
-                            val episodeId = sources.firstOrNull()?.episodeId
+                            val orderedSources = sources.sortedWith(
+                                compareBy<EpisodeSource> {
+                                    when {
+                                        it.playerName.contains("Ashdi", true) -> 0
+                                        it.playerName.contains("Moon", true) -> 1
+                                        else -> 2
+                                    }
+                                }
+                            )
+
+                            val orderedEpisodeIds = orderedSources.map { it.episodeId }.distinct()
+                            Log.e(
+                                TAG,
+                                "load: ep=$epNum poster priority players=${orderedSources.map { it.playerName }} ids=$orderedEpisodeIds"
+                            )
+
+                            val episodeId = orderedEpisodeIds.firstOrNull()
                             if (episodeId != null) {
                                 val key = java.util.UUID.randomUUID().toString().replace("-", "")
-                                posterFetchTasks[key] = PosterFetchTask(episodeId, animeId)
+                                posterFetchTasks[key] = PosterFetchTask(orderedEpisodeIds, animeId, epNum)
                                 epPoster = "http://127.0.0.1:$posterProxyPort/poster?$key"
-                                Log.e(TAG, "load: queued poster fetch ep=$epNum epId=$episodeId key=$key")
+                                Log.e(TAG, "load: queued poster fetch ep=$epNum primaryEpId=$episodeId key=$key")
 
                                 val prefetchKey = key
-                                val prefetchEpisodeId = episodeId
+                                val prefetchEpisodeIds = orderedEpisodeIds
                                 val prefetchAnimeId = animeId
+                                val prefetchEpNum = epNum
+
                                 posterPrefetchExecutor.submit {
                                     if (!posterCache.containsKey(prefetchKey)) {
-                                        val bytes = fetchEpisodePosterBytes(prefetchEpisodeId)
+                                        Log.e(TAG, "load: prefetch poster ep=$prefetchEpNum ids=$prefetchEpisodeIds")
+                                        val bytes = fetchEpisodePosterBytes(prefetchEpisodeIds)
                                         if (bytes != null && bytes.isNotEmpty()) {
                                             posterCache[prefetchKey] = bytes
-                                            episodePosterCache["$prefetchAnimeId:$prefetchEpisodeId"] =
+                                            episodePosterCache["$prefetchAnimeId:$prefetchEpNum"] =
                                                 "http://127.0.0.1:$posterProxyPort/poster?$prefetchKey"
+                                            Log.e(TAG, "load: prefetch poster OK ep=$prefetchEpNum bytes=${bytes.size}")
+                                        } else {
+                                            Log.e(TAG, "load: prefetch poster FAILED ep=$prefetchEpNum")
                                         }
                                     }
                                 }
+                            } else {
+                                Log.e(TAG, "load: no episodeId for poster ep=$epNum")
                             }
                         }
                     }
@@ -2186,7 +2282,7 @@ class AnimeONProvider : MainAPI() {
 
                                     if (isFenix && finalUrl.contains("fenixplay.xyz")) {
                                         Log.e(TAG, "loadMovieLinks: FENIX direct url=${finalUrl.take(120)}")
-                                        
+
                                         if (lastFenixPlaylist == null) {
                                             fetchFenixPlaylist(finalUrl)
                                         }
@@ -2377,7 +2473,7 @@ class AnimeONProvider : MainAPI() {
                         try {
                             if (isFenix && videoUrl.contains("fenixplay.xyz")) {
                                 Log.e(TAG, "loadMovieLinks: FENIX ep branch")
-                                
+
                                 if (lastFenixPlaylist == null) {
                                     fetchFenixPlaylist(videoUrl)
                                 }
