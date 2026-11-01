@@ -77,7 +77,7 @@ class AnimeONProvider : MainAPI() {
         val playerName: String,
         val episodes: List<FundubEpisode>
     )
-    
+
     private data class SubToAdd(val lang: String, val url: String, val priority: Int)
 
     private val posterHttpClient = okhttp3.OkHttpClient.Builder()
@@ -1514,7 +1514,7 @@ class AnimeONProvider : MainAPI() {
                         val ep = details?.episode
 
                         if (ep != null) {
-                            val mediaToken = lastFenixMediaAccess?.token
+                            val mediaToken = lastFenixMediaAccess?.token ?: details?.token
                             val fenixReferer = "https://fenixplay.xyz/"
                             val fenixHeaders2 = mapOf(
                                 "User-Agent" to userAgent,
@@ -1558,49 +1558,7 @@ class AnimeONProvider : MainAPI() {
                                 ))
                             }
 
-                            val subsToAdd = mutableListOf<SubToAdd>()
-                            ep.subtitles?.forEach { sub ->
-                                val baseLang = sub.language ?: sub.label ?: "UK"
-                                val variants = mutableListOf<Pair<String?, String?>>()
-                                variants.add(sub.kind to sub.url)
-                                sub.renditions?.forEach { (kind, rendition) ->
-                                    variants.add(kind to rendition.url)
-                                }
-                                variants.forEach { (kind, u) ->
-                                    if (u.isNullOrEmpty()) return@forEach
-                                    if (u.contains(".ass", ignoreCase = true)) return@forEach
-                                    val kindLabel = when {
-                                        kind.isNullOrEmpty() || kind == "full" -> ""
-                                        kind == "signs" -> " · Написи"
-                                        kind.equals("sdh", ignoreCase = true) -> " · SDH"
-                                        else -> " · $kind"
-                                    }
-                                    val studioLabel = sub.voice_studio_name?.let { " · $it" } ?: ""
-                                    val displayLang = "$baseLang$kindLabel$studioLabel"
-                                    val priority = if (sub.is_default == true) 0 else 1
-                                    subsToAdd.add(SubToAdd(displayLang, u, priority))
-                                }
-                            }
-
-                            val seenSubUrls = mutableSetOf<String>()
-                            subsToAdd.sortedBy { it.priority }.forEach { s ->
-                                val cleanUrl = s.url.substringBefore("?")
-                                if (!seenSubUrls.add(cleanUrl)) return@forEach
-                                val fullSubUrl = addToken(s.url)
-                                try {
-                                    val bytes = app.get(fullSubUrl, headers = fenixHeaders2, cacheTime = 0).body.bytes()
-                                    if (bytes.isEmpty()) {
-                                        subtitleCallback.invoke(newSubtitleFile(s.lang, fullSubUrl))
-                                        return@forEach
-                                    }
-                                    val key = java.util.UUID.randomUUID().toString().replace("-", "")
-                                    subtitleCache[key] = bytes
-                                    val proxyUrl = "http://127.0.0.1:$subtitleProxyPort/sub?$key"
-                                    subtitleCallback.invoke(newSubtitleFile(s.lang, proxyUrl))
-                                } catch (e: Exception) {
-                                    subtitleCallback.invoke(newSubtitleFile(s.lang, fullSubUrl))
-                                }
-                            }
+                            emitFenixSubtitles(ep, subtitleCallback, fenixHeaders2, ::addToken)
 
                             foundAny = true
                         }
@@ -1765,7 +1723,7 @@ class AnimeONProvider : MainAPI() {
                                             val ep = details?.episode
 
                                             if (ep != null) {
-                                                val mediaToken = lastFenixMediaAccess?.token
+                                                val mediaToken = lastFenixMediaAccess?.token ?: details?.token
                                                 val fenixReferer = "https://fenixplay.xyz/"
                                                 val fenixHeaders2 = mapOf(
                                                     "User-Agent" to userAgent,
@@ -1809,49 +1767,7 @@ class AnimeONProvider : MainAPI() {
                                                     ))
                                                 }
 
-                                                val subsToAdd = mutableListOf<SubToAdd>()
-                                                ep.subtitles?.forEach { sub ->
-                                                    val baseLang = sub.language ?: sub.label ?: "UK"
-                                                    val variants = mutableListOf<Pair<String?, String?>>()
-                                                    variants.add(sub.kind to sub.url)
-                                                    sub.renditions?.forEach { (kind, rendition) ->
-                                                        variants.add(kind to rendition.url)
-                                                    }
-                                                    variants.forEach { (kind, u) ->
-                                                        if (u.isNullOrEmpty()) return@forEach
-                                                        if (u.contains(".ass", ignoreCase = true)) return@forEach
-                                                        val kindLabel = when {
-                                                            kind.isNullOrEmpty() || kind == "full" -> ""
-                                                            kind == "signs" -> " · Написи"
-                                                            kind.equals("sdh", ignoreCase = true) -> " · SDH"
-                                                            else -> " · $kind"
-                                                        }
-                                                        val studioLabel = sub.voice_studio_name?.let { " · $it" } ?: ""
-                                                        val displayLang = "$baseLang$kindLabel$studioLabel"
-                                                        val priority = if (sub.is_default == true) 0 else 1
-                                                        subsToAdd.add(SubToAdd(displayLang, u, priority))
-                                                    }
-                                                }
-
-                                                val seenSubUrls = mutableSetOf<String>()
-                                                subsToAdd.sortedBy { it.priority }.forEach { s ->
-                                                    val cleanUrl = s.url.substringBefore("?")
-                                                    if (!seenSubUrls.add(cleanUrl)) return@forEach
-                                                    val fullSubUrl = addToken(s.url)
-                                                    try {
-                                                        val bytes = app.get(fullSubUrl, headers = fenixHeaders2, cacheTime = 0).body.bytes()
-                                                        if (bytes.isEmpty()) {
-                                                            subtitleCallback.invoke(newSubtitleFile(s.lang, fullSubUrl))
-                                                            return@forEach
-                                                        }
-                                                        val key = java.util.UUID.randomUUID().toString().replace("-", "")
-                                                        subtitleCache[key] = bytes
-                                                        val proxyUrl = "http://127.0.0.1:$subtitleProxyPort/sub?$key"
-                                                        subtitleCallback.invoke(newSubtitleFile(s.lang, proxyUrl))
-                                                    } catch (e: Exception) {
-                                                        subtitleCallback.invoke(newSubtitleFile(s.lang, fullSubUrl))
-                                                    }
-                                                }
+                                                emitFenixSubtitles(ep, subtitleCallback, fenixHeaders2, ::addToken)
 
                                                 foundAny = true
                                             }
@@ -1930,7 +1846,7 @@ class AnimeONProvider : MainAPI() {
                                     val epDetails = details?.episode
 
                                     if (epDetails != null) {
-                                        val mediaToken = lastFenixMediaAccess?.token
+                                        val mediaToken = lastFenixMediaAccess?.token ?: details?.token
                                         val fenixReferer = "https://fenixplay.xyz/"
                                         val fenixHeaders2 = mapOf(
                                             "User-Agent" to userAgent,
@@ -1974,49 +1890,7 @@ class AnimeONProvider : MainAPI() {
                                             ))
                                         }
 
-                                        val subsToAdd = mutableListOf<SubToAdd>()
-                                        epDetails.subtitles?.forEach { sub ->
-                                            val baseLang = sub.language ?: sub.label ?: "UK"
-                                            val variants = mutableListOf<Pair<String?, String?>>()
-                                            variants.add(sub.kind to sub.url)
-                                            sub.renditions?.forEach { (kind, rendition) ->
-                                                variants.add(kind to rendition.url)
-                                            }
-                                            variants.forEach { (kind, u) ->
-                                                if (u.isNullOrEmpty()) return@forEach
-                                                if (u.contains(".ass", ignoreCase = true)) return@forEach
-                                                val kindLabel = when {
-                                                    kind.isNullOrEmpty() || kind == "full" -> ""
-                                                    kind == "signs" -> " · Написи"
-                                                    kind.equals("sdh", ignoreCase = true) -> " · SDH"
-                                                    else -> " · $kind"
-                                                }
-                                                val studioLabel = sub.voice_studio_name?.let { " · $it" } ?: ""
-                                                val displayLang = "$baseLang$kindLabel$studioLabel"
-                                                val priority = if (sub.is_default == true) 0 else 1
-                                                subsToAdd.add(SubToAdd(displayLang, u, priority))
-                                            }
-                                        }
-
-                                        val seenSubUrls = mutableSetOf<String>()
-                                        subsToAdd.sortedBy { it.priority }.forEach { s ->
-                                            val cleanUrl = s.url.substringBefore("?")
-                                            if (!seenSubUrls.add(cleanUrl)) return@forEach
-                                            val fullSubUrl = addToken(s.url)
-                                            try {
-                                                val bytes = app.get(fullSubUrl, headers = fenixHeaders2, cacheTime = 0).body.bytes()
-                                                if (bytes.isEmpty()) {
-                                                    subtitleCallback.invoke(newSubtitleFile(s.lang, fullSubUrl))
-                                                    return@forEach
-                                                }
-                                                val key = java.util.UUID.randomUUID().toString().replace("-", "")
-                                                subtitleCache[key] = bytes
-                                                val proxyUrl = "http://127.0.0.1:$subtitleProxyPort/sub?$key"
-                                                subtitleCallback.invoke(newSubtitleFile(s.lang, proxyUrl))
-                                            } catch (e: Exception) {
-                                                subtitleCallback.invoke(newSubtitleFile(s.lang, fullSubUrl))
-                                            }
-                                        }
+                                        emitFenixSubtitles(epDetails, subtitleCallback, fenixHeaders2, ::addToken)
 
                                         foundAny = true
                                     }
@@ -2077,6 +1951,100 @@ class AnimeONProvider : MainAPI() {
         }
 
         return foundAny
+    }
+
+    private fun subtitleExtFromUrl(url: String): String {
+        val path = url.substringBefore("?").substringAfterLast("/")
+
+        return when {
+            path.endsWith(".ass", true) -> ".ass"
+            path.endsWith(".ssa", true) -> ".ass"
+            path.endsWith(".vtt", true) -> ".vtt"
+            path.endsWith(".srt", true) -> ".srt"
+            else -> ".vtt"
+        }
+    }
+
+    private fun subtitleContentType(ext: String): String {
+        return when (ext) {
+            ".ass" -> "text/x-ssa"
+            ".srt" -> "application/x-subrip"
+            else -> "text/vtt"
+        }
+    }
+
+    private suspend fun fetchSubtitleBytes(url: String, headers: Map<String, String>): ByteArray {
+        return try {
+            app.get(url, headers = headers, cacheTime = 0).body.bytes()
+        } catch (e: Exception) {
+            ByteArray(0)
+        }
+    }
+
+    private suspend fun emitFenixSubtitles(
+        episode: FenixPlaybackEpisode,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        headers: Map<String, String>,
+        addToken: (String) -> String
+    ) {
+        ensureSubtitleProxy()
+
+        val subsToAdd = mutableListOf<SubToAdd>()
+
+        episode.subtitles?.forEach { sub ->
+            val baseLang = sub.language ?: sub.label ?: "UK"
+            val variants = mutableListOf<Pair<String?, String?>>()
+
+            variants.add(sub.kind to (sub.url ?: sub.styled_url))
+
+            sub.renditions?.forEach { (kind, rendition) ->
+                variants.add(kind to (rendition.url ?: rendition.styled_url))
+            }
+
+            variants.forEach { (kind, u) ->
+                if (u.isNullOrEmpty()) return@forEach
+
+                val kindLabel = when {
+                    kind.isNullOrEmpty() || kind == "full" -> ""
+                    kind == "signs" -> " · Написи"
+                    kind.equals("sdh", true) -> " · SDH"
+                    else -> " · $kind"
+                }
+                val studioLabel = sub.voice_studio_name?.let { " · $it" } ?: ""
+                val displayLang = "$baseLang$kindLabel$studioLabel"
+                val priority = if (sub.is_default == true) 0 else 1
+
+                subsToAdd.add(SubToAdd(displayLang, u, priority))
+            }
+        }
+
+        val seenSubs = mutableSetOf<String>()
+
+        subsToAdd.sortedBy { it.priority }.forEach { s ->
+            val cleanUrl = s.url.substringBefore("?")
+            if (!seenSubs.add("${s.lang}|$cleanUrl")) return@forEach
+
+            val tokenUrl = addToken(s.url)
+            var bytes = fetchSubtitleBytes(tokenUrl, headers)
+
+            if (bytes.isEmpty() && tokenUrl != s.url) {
+                bytes = fetchSubtitleBytes(s.url, headers)
+            }
+
+            if (bytes.isEmpty()) {
+                subtitleCallback.invoke(newSubtitleFile(s.lang, s.url))
+                return@forEach
+            }
+
+            val ext = subtitleExtFromUrl(s.url)
+            val key = java.util.UUID.randomUUID().toString().replace("-", "") + ext
+
+            subtitleCache[key] = bytes
+            subtitleCacheType[key] = subtitleContentType(ext)
+
+            val proxyUrl = "http://127.0.0.1:$subtitleProxyPort/sub?$key"
+            subtitleCallback.invoke(newSubtitleFile(s.lang, proxyUrl))
+        }
     }
 
     private suspend fun processMoonRawFile(
@@ -2415,6 +2383,7 @@ class AnimeONProvider : MainAPI() {
 
     private var subtitleProxyPort: Int = 0
     private val subtitleCache = java.util.concurrent.ConcurrentHashMap<String, ByteArray>()
+    private val subtitleCacheType = java.util.concurrent.ConcurrentHashMap<String, String>()
 
     private fun ensureSubtitleProxy() {
         if (subtitleProxyPort != 0) return
@@ -2430,15 +2399,28 @@ class AnimeONProvider : MainAPI() {
                     Thread {
                         try {
                             val line = client.getInputStream().bufferedReader().readLine() ?: return@Thread
-                            val key = line.substringAfter("?").substringBefore(" ")
+                            val key = line.substringAfter("?").substringBefore(" ").trim()
                             val body = subtitleCache[key]
                             val out = client.getOutputStream()
 
                             if (body != null) {
-                                out.write(("HTTP/1.1 200 OK\r\nContent-Type: text/vtt; charset=utf-8\r\nContent-Length: ${body.size}\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n").toByteArray())
+                                val contentType = subtitleCacheType[key] ?: "text/vtt"
+
+                                out.write(
+                                    (
+                                        "HTTP/1.1 200 OK\r\n" +
+                                        "Content-Type: $contentType; charset=utf-8\r\n" +
+                                        "Content-Length: ${body.size}\r\n" +
+                                        "Access-Control-Allow-Origin: *\r\n" +
+                                        "Connection: close\r\n\r\n"
+                                    ).toByteArray()
+                                )
                                 out.write(body)
                             } else {
-                                out.write("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray())
+                                out.write(
+                                    "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                                        .toByteArray()
+                                )
                             }
 
                             out.flush()
@@ -2476,8 +2458,11 @@ class AnimeONProvider : MainAPI() {
                         cacheTime = 0
                     ).body.bytes()
 
-                    val key = java.util.UUID.randomUUID().toString().replace("-", "")
+                    val ext = subtitleExtFromUrl(url)
+                    val key = java.util.UUID.randomUUID().toString().replace("-", "") + ext
                     subtitleCache[key] = bytes
+                    subtitleCacheType[key] = subtitleContentType(ext)
+
                     val proxyUrl = "http://127.0.0.1:$subtitleProxyPort/sub?$key"
                     subtitleCallback.invoke(newSubtitleFile(lang, proxyUrl))
                 } catch (e: Exception) {
