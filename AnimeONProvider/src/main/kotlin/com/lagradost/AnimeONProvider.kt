@@ -7,7 +7,6 @@ import com.lagradost.cloudstream3.utils.AppUtils
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.M3u8Helper
 import com.lagradost.models.*
-import kotlinx.coroutines.runBlocking
 
 class AnimeONProvider : MainAPI() {
 
@@ -363,7 +362,7 @@ class AnimeONProvider : MainAPI() {
                             if (body == null) {
                                 val task = posterFetchTasks[key]
                                 if (task != null) {
-                                    body = runBlocking { fetchEpisodePosterBytes(task.episodeIds) }
+                                    body = fetchEpisodePosterBytes(task.episodeIds)
                                     if (body != null && body.isNotEmpty()) {
                                         posterCache[key] = body
                                         episodePosterCache["${task.animeId}:${task.epNum}"] =
@@ -921,7 +920,34 @@ class AnimeONProvider : MainAPI() {
         }
     }
 
-    private suspend fun fetchEpisodePosterBytes(episodeIds: List<Int>): ByteArray? {
+    private fun fetchFenixEpisodePlaybackSync(
+        slug: String,
+        playbackToken: String,
+        edition: String,
+        number: Int
+    ): FenixPlaybackEpisodeResponse? {
+        val url = "https://fenixplay.xyz/api/playback/" +
+            java.net.URLEncoder.encode(slug, "UTF-8") + "/episodes/" +
+            java.net.URLEncoder.encode(edition, "UTF-8") + "/" + number
+
+        val json = httpGetText(
+            url,
+            mapOf(
+                "User-Agent" to userAgent,
+                "X-Fenix-Playback" to playbackToken,
+                "Accept" to "application/json, text/plain, */*",
+                "Referer" to "https://fenixplay.xyz/"
+            )
+        ) ?: return null
+
+        return try {
+            AppUtils.parseJson<FenixPlaybackEpisodeResponse>(json)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun fetchEpisodePosterBytes(episodeIds: List<Int>): ByteArray? {
         if (episodeIds.isEmpty()) return null
 
         for (episodeId in episodeIds) {
@@ -932,12 +958,12 @@ class AnimeONProvider : MainAPI() {
         return null
     }
 
-    private suspend fun fetchSingleEpisodePosterBytes(episodeId: Int): ByteArray? {
+    private fun fetchSingleEpisodePosterBytes(episodeId: Int): ByteArray? {
         val videoUrl = fetchEpisodeVideoUrlSync(episodeId) ?: return null
 
         if (videoUrl.contains("fenixplay.xyz")) {
             if (lastFenixPlaylist == null) {
-                fetchFenixPlaylist(videoUrl)
+                fetchFenixPlaylistSync(videoUrl)
             }
 
             val slug = lastFenixPlaylist?.slug
@@ -947,7 +973,7 @@ class AnimeONProvider : MainAPI() {
 
             if (slug.isNullOrEmpty() || playbackToken.isNullOrEmpty()) return null
 
-            val details = fetchFenixEpisodePlayback(slug, playbackToken, edition, epNum)
+            val details = fetchFenixEpisodePlaybackSync(slug, playbackToken, edition, epNum)
             val thumb = details?.episode?.thumbnail_url
 
             if (!thumb.isNullOrBlank()) {
@@ -1307,7 +1333,7 @@ class AnimeONProvider : MainAPI() {
 
                                 posterPrefetchExecutor.submit {
                                     if (!posterCache.containsKey(prefetchKey)) {
-                                        val bytes = runBlocking { fetchEpisodePosterBytes(prefetchEpisodeIds) }
+                                        val bytes = fetchEpisodePosterBytes(prefetchEpisodeIds)
                                         if (bytes != null && bytes.isNotEmpty()) {
                                             posterCache[prefetchKey] = bytes
                                             episodePosterCache["$prefetchAnimeId:$prefetchEpNum"] =
