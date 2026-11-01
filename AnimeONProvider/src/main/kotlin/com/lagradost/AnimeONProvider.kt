@@ -77,6 +77,8 @@ class AnimeONProvider : MainAPI() {
         val playerName: String,
         val episodes: List<FundubEpisode>
     )
+    
+    private data class SubToAdd(val lang: String, val url: String, val priority: Int)
 
     private val posterHttpClient = okhttp3.OkHttpClient.Builder()
         .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
@@ -242,12 +244,24 @@ class AnimeONProvider : MainAPI() {
         val recap: Boolean? = null,
     )
 
+    private data class FenixSubtitleRendition(
+        val url: String? = null,
+        val styled_url: String? = null,
+        val fonts_url: String? = null,
+    )
+
     private data class FenixSubtitle(
         val label: String? = null,
         val language: String? = null,
         val url: String? = null,
         val styled_url: String? = null,
-        val fonts_url: String? = null
+        val fonts_url: String? = null,
+        val kind: String? = null,
+        val voice_studio_id: String? = null,
+        val voice_studio_name: String? = null,
+        val is_default: Boolean? = null,
+        val offset_ms: Int? = null,
+        val renditions: Map<String, FenixSubtitleRendition>? = null,
     )
 
     private data class FenixMediaAccess(
@@ -1544,29 +1558,47 @@ class AnimeONProvider : MainAPI() {
                                 ))
                             }
 
+                            val subsToAdd = mutableListOf<SubToAdd>()
                             ep.subtitles?.forEach { sub ->
-                                val subUrl = sub.url ?: return@forEach
-                                val lang = sub.label ?: sub.language ?: "UA"
-                                val fullSubUrl = addToken(subUrl)
+                                val baseLang = sub.language ?: sub.label ?: "UK"
+                                val variants = mutableListOf<Pair<String?, String?>>()
+                                variants.add(sub.kind to sub.url)
+                                sub.renditions?.forEach { (kind, rendition) ->
+                                    variants.add(kind to rendition.url)
+                                }
+                                variants.forEach { (kind, u) ->
+                                    if (u.isNullOrEmpty()) return@forEach
+                                    if (u.contains(".ass", ignoreCase = true)) return@forEach
+                                    val kindLabel = when {
+                                        kind.isNullOrEmpty() || kind == "full" -> ""
+                                        kind == "signs" -> " · Написи"
+                                        kind.equals("sdh", ignoreCase = true) -> " · SDH"
+                                        else -> " · $kind"
+                                    }
+                                    val studioLabel = sub.voice_studio_name?.let { " · $it" } ?: ""
+                                    val displayLang = "$baseLang$kindLabel$studioLabel"
+                                    val priority = if (sub.is_default == true) 0 else 1
+                                    subsToAdd.add(SubToAdd(displayLang, u, priority))
+                                }
+                            }
 
+                            val seenSubUrls = mutableSetOf<String>()
+                            subsToAdd.sortedBy { it.priority }.forEach { s ->
+                                val cleanUrl = s.url.substringBefore("?")
+                                if (!seenSubUrls.add(cleanUrl)) return@forEach
+                                val fullSubUrl = addToken(s.url)
                                 try {
-                                    val bytes = app.get(
-                                        fullSubUrl,
-                                        headers = fenixHeaders2,
-                                        cacheTime = 0
-                                    ).body.bytes()
-
+                                    val bytes = app.get(fullSubUrl, headers = fenixHeaders2, cacheTime = 0).body.bytes()
                                     if (bytes.isEmpty()) {
-                                        subtitleCallback.invoke(newSubtitleFile(lang, fullSubUrl))
+                                        subtitleCallback.invoke(newSubtitleFile(s.lang, fullSubUrl))
                                         return@forEach
                                     }
-
                                     val key = java.util.UUID.randomUUID().toString().replace("-", "")
                                     subtitleCache[key] = bytes
                                     val proxyUrl = "http://127.0.0.1:$subtitleProxyPort/sub?$key"
-                                    subtitleCallback.invoke(newSubtitleFile(lang, proxyUrl))
+                                    subtitleCallback.invoke(newSubtitleFile(s.lang, proxyUrl))
                                 } catch (e: Exception) {
-                                    subtitleCallback.invoke(newSubtitleFile(lang, fullSubUrl))
+                                    subtitleCallback.invoke(newSubtitleFile(s.lang, fullSubUrl))
                                 }
                             }
 
@@ -1586,15 +1618,12 @@ class AnimeONProvider : MainAPI() {
                             streamUrl = videoUrl,
                             referer = "https://ashdi.vip"
                         )
-
                         val filtered = streams.dropLast(1)
-
                         if (filtered.isNotEmpty()) {
                             filtered.forEach { safeCallback(fixMovieExtractorLink(it, sourceName)) }
                         } else {
                             streams.forEach { safeCallback(fixMovieExtractorLink(it, sourceName)) }
                         }
-
                         foundAny = true
                     }
                 } else {
@@ -1606,19 +1635,15 @@ class AnimeONProvider : MainAPI() {
                                 referer = "https://moonanime.net/",
                                 headers = moonVideoHeaders
                             )
-
                             val filtered = streams.dropLast(1)
-
                             if (filtered.isNotEmpty()) {
                                 filtered.forEach { safeCallback(fixMovieExtractorLink(it, sourceName)) }
                             } else {
                                 streams.forEach { safeCallback(fixMovieExtractorLink(it, sourceName)) }
                             }
-
                             foundAny = true
                         } else {
                             val (rawFile, subUrl) = getMoonFile(videoUrl)
-
                             if (rawFile.isNotEmpty()) {
                                 invokeSubtitles(subUrl, subtitleCallback)
                                 processMoonRawFile(rawFile, sourceName, isMovie = false, safeCallback)
@@ -1687,30 +1712,23 @@ class AnimeONProvider : MainAPI() {
                             } catch (e: Exception) {
                                 null
                             }
-
                             eps?.filter { it.episode <= 0 && seenIDs.add(it.id) }?.let {
                                 collected.addAll(it)
                             }
                         }
 
                         var skip = 0
-
                         while (true) {
                             val epJson = fetchJsonWithRetry("$baseUrl&skip=$skip&includeAlternative=$includeAlt") ?: break
-
                             val eps = try {
                                 AppUtils.parseJson<SafePlayerEpisodes>(epJson).episodes
                             } catch (e: Exception) {
                                 null
                             }
-
                             if (eps.isNullOrEmpty()) break
-
                             val newEps = eps.filter { seenIDs.add(it.id) }
                             collected.addAll(newEps)
-
                             if (eps.size < 1000) break
-
                             skip += 1000
                         }
                     }
@@ -1791,29 +1809,47 @@ class AnimeONProvider : MainAPI() {
                                                     ))
                                                 }
 
+                                                val subsToAdd = mutableListOf<SubToAdd>()
                                                 ep.subtitles?.forEach { sub ->
-                                                    val subUrl = sub.url ?: return@forEach
-                                                    val lang = sub.label ?: sub.language ?: "UA"
-                                                    val fullSubUrl = addToken(subUrl)
+                                                    val baseLang = sub.language ?: sub.label ?: "UK"
+                                                    val variants = mutableListOf<Pair<String?, String?>>()
+                                                    variants.add(sub.kind to sub.url)
+                                                    sub.renditions?.forEach { (kind, rendition) ->
+                                                        variants.add(kind to rendition.url)
+                                                    }
+                                                    variants.forEach { (kind, u) ->
+                                                        if (u.isNullOrEmpty()) return@forEach
+                                                        if (u.contains(".ass", ignoreCase = true)) return@forEach
+                                                        val kindLabel = when {
+                                                            kind.isNullOrEmpty() || kind == "full" -> ""
+                                                            kind == "signs" -> " · Написи"
+                                                            kind.equals("sdh", ignoreCase = true) -> " · SDH"
+                                                            else -> " · $kind"
+                                                        }
+                                                        val studioLabel = sub.voice_studio_name?.let { " · $it" } ?: ""
+                                                        val displayLang = "$baseLang$kindLabel$studioLabel"
+                                                        val priority = if (sub.is_default == true) 0 else 1
+                                                        subsToAdd.add(SubToAdd(displayLang, u, priority))
+                                                    }
+                                                }
 
+                                                val seenSubUrls = mutableSetOf<String>()
+                                                subsToAdd.sortedBy { it.priority }.forEach { s ->
+                                                    val cleanUrl = s.url.substringBefore("?")
+                                                    if (!seenSubUrls.add(cleanUrl)) return@forEach
+                                                    val fullSubUrl = addToken(s.url)
                                                     try {
-                                                        val bytes = app.get(
-                                                            fullSubUrl,
-                                                            headers = fenixHeaders2,
-                                                            cacheTime = 0
-                                                        ).body.bytes()
-
+                                                        val bytes = app.get(fullSubUrl, headers = fenixHeaders2, cacheTime = 0).body.bytes()
                                                         if (bytes.isEmpty()) {
-                                                            subtitleCallback.invoke(newSubtitleFile(lang, fullSubUrl))
+                                                            subtitleCallback.invoke(newSubtitleFile(s.lang, fullSubUrl))
                                                             return@forEach
                                                         }
-
                                                         val key = java.util.UUID.randomUUID().toString().replace("-", "")
                                                         subtitleCache[key] = bytes
                                                         val proxyUrl = "http://127.0.0.1:$subtitleProxyPort/sub?$key"
-                                                        subtitleCallback.invoke(newSubtitleFile(lang, proxyUrl))
+                                                        subtitleCallback.invoke(newSubtitleFile(s.lang, proxyUrl))
                                                     } catch (e: Exception) {
-                                                        subtitleCallback.invoke(newSubtitleFile(lang, fullSubUrl))
+                                                        subtitleCallback.invoke(newSubtitleFile(s.lang, fullSubUrl))
                                                     }
                                                 }
 
@@ -1938,29 +1974,47 @@ class AnimeONProvider : MainAPI() {
                                             ))
                                         }
 
+                                        val subsToAdd = mutableListOf<SubToAdd>()
                                         epDetails.subtitles?.forEach { sub ->
-                                            val subUrl = sub.url ?: return@forEach
-                                            val lang = sub.label ?: sub.language ?: "UA"
-                                            val fullSubUrl = addToken(subUrl)
+                                            val baseLang = sub.language ?: sub.label ?: "UK"
+                                            val variants = mutableListOf<Pair<String?, String?>>()
+                                            variants.add(sub.kind to sub.url)
+                                            sub.renditions?.forEach { (kind, rendition) ->
+                                                variants.add(kind to rendition.url)
+                                            }
+                                            variants.forEach { (kind, u) ->
+                                                if (u.isNullOrEmpty()) return@forEach
+                                                if (u.contains(".ass", ignoreCase = true)) return@forEach
+                                                val kindLabel = when {
+                                                    kind.isNullOrEmpty() || kind == "full" -> ""
+                                                    kind == "signs" -> " · Написи"
+                                                    kind.equals("sdh", ignoreCase = true) -> " · SDH"
+                                                    else -> " · $kind"
+                                                }
+                                                val studioLabel = sub.voice_studio_name?.let { " · $it" } ?: ""
+                                                val displayLang = "$baseLang$kindLabel$studioLabel"
+                                                val priority = if (sub.is_default == true) 0 else 1
+                                                subsToAdd.add(SubToAdd(displayLang, u, priority))
+                                            }
+                                        }
 
+                                        val seenSubUrls = mutableSetOf<String>()
+                                        subsToAdd.sortedBy { it.priority }.forEach { s ->
+                                            val cleanUrl = s.url.substringBefore("?")
+                                            if (!seenSubUrls.add(cleanUrl)) return@forEach
+                                            val fullSubUrl = addToken(s.url)
                                             try {
-                                                val bytes = app.get(
-                                                    fullSubUrl,
-                                                    headers = fenixHeaders2,
-                                                    cacheTime = 0
-                                                ).body.bytes()
-
+                                                val bytes = app.get(fullSubUrl, headers = fenixHeaders2, cacheTime = 0).body.bytes()
                                                 if (bytes.isEmpty()) {
-                                                    subtitleCallback.invoke(newSubtitleFile(lang, fullSubUrl))
+                                                    subtitleCallback.invoke(newSubtitleFile(s.lang, fullSubUrl))
                                                     return@forEach
                                                 }
-
                                                 val key = java.util.UUID.randomUUID().toString().replace("-", "")
                                                 subtitleCache[key] = bytes
                                                 val proxyUrl = "http://127.0.0.1:$subtitleProxyPort/sub?$key"
-                                                subtitleCallback.invoke(newSubtitleFile(lang, proxyUrl))
+                                                subtitleCallback.invoke(newSubtitleFile(s.lang, proxyUrl))
                                             } catch (e: Exception) {
-                                                subtitleCallback.invoke(newSubtitleFile(lang, fullSubUrl))
+                                                subtitleCallback.invoke(newSubtitleFile(s.lang, fullSubUrl))
                                             }
                                         }
 
@@ -2063,18 +2117,14 @@ class AnimeONProvider : MainAPI() {
                             referer = "https://moonanime.net/",
                             headers = moonVideoHeaders
                         )
-
                         val filtered = streams.dropLast(1)
                         val finalStreams = if (filtered.isNotEmpty()) filtered else streams
-
                         finalStreams.forEach {
                             callback(fixMovieExtractorLink(it, sourceName))
                         }
                     }
-
                     qUrl.contains("s.moonanime.net") || qUrl.contains("moonanime.net/content") -> {
                         val finalUrl = resolveMoonContent(qUrl)
-
                         if (!finalUrl.isNullOrEmpty()) {
                             val link = ExtractorLink(
                                 source = name,
@@ -2085,11 +2135,9 @@ class AnimeONProvider : MainAPI() {
                                 type = com.lagradost.cloudstream3.utils.ExtractorLinkType.VIDEO,
                                 headers = moonVideoHeaders
                             )
-
                             callback(fixMovieExtractorLink(link, sourceName))
                         }
                     }
-
                     else -> {
                         val link = ExtractorLink(
                             source = name,
@@ -2100,7 +2148,6 @@ class AnimeONProvider : MainAPI() {
                             type = com.lagradost.cloudstream3.utils.ExtractorLinkType.VIDEO,
                             headers = moonVideoHeaders
                         )
-
                         callback(fixMovieExtractorLink(link, sourceName))
                     }
                 }
@@ -2112,16 +2159,13 @@ class AnimeONProvider : MainAPI() {
                 referer = "https://moonanime.net/",
                 headers = moonVideoHeaders
             )
-
             val filtered = streams.dropLast(1)
             val finalStreams = if (filtered.isNotEmpty()) filtered else streams
-
             finalStreams.forEach {
                 callback(fixMovieExtractorLink(it, sourceName))
             }
         } else if (rawFile.contains("s.moonanime.net") || rawFile.contains("moonanime.net/content")) {
             val finalUrl = resolveMoonContent(rawFile)
-
             if (!finalUrl.isNullOrEmpty()) {
                 val link = ExtractorLink(
                     source = name,
@@ -2132,7 +2176,6 @@ class AnimeONProvider : MainAPI() {
                     type = com.lagradost.cloudstream3.utils.ExtractorLinkType.VIDEO,
                     headers = moonVideoHeaders
                 )
-
                 callback(fixMovieExtractorLink(link, sourceName))
             }
         } else {
@@ -2145,7 +2188,6 @@ class AnimeONProvider : MainAPI() {
                 type = com.lagradost.cloudstream3.utils.ExtractorLinkType.VIDEO,
                 headers = moonVideoHeaders
             )
-
             callback(fixMovieExtractorLink(link, sourceName))
         }
     }
@@ -2186,17 +2228,14 @@ class AnimeONProvider : MainAPI() {
 
                 if (urlEnd != -1) {
                     val masterUrl = html.substring(urlStart, urlEnd)
-
                     if (masterUrl.isNotEmpty() && masterUrl.endsWith(".m3u8")) {
                         val streams = M3u8Helper.generateM3u8(
                             source = sourceName,
                             streamUrl = masterUrl,
                             referer = "https://ashdi.vip/"
                         )
-
                         val filtered = streams.dropLast(1)
                         val finalStreams = if (filtered.isNotEmpty()) filtered else streams
-
                         finalStreams.forEach { link ->
                             callback(fixMovieExtractorLink(link, sourceName))
                         }
@@ -2226,7 +2265,6 @@ class AnimeONProvider : MainAPI() {
     private fun moonOuterDecode(base64Blob: String): String {
         return try {
             val raw = android.util.Base64.decode(base64Blob, android.util.Base64.DEFAULT)
-
             if (raw.size < 33) return ""
 
             val state0 = raw[0].toInt() and 0xFF
@@ -2239,7 +2277,6 @@ class AnimeONProvider : MainAPI() {
             for (i in data.indices) {
                 val d = data[i].toInt() and 0xFF
                 val k = key[i % 32].toInt() and 0xFF
-
                 result[i] = (d xor k xor state).toByte()
                 state = (d + k) and 0xFF
             }
@@ -2284,7 +2321,6 @@ class AnimeONProvider : MainAPI() {
 
             for (m in atobRegex.findAll(html)) {
                 val d = moonOuterDecode(m.groupValues[1])
-
                 if (d.contains("_0xd") || d.contains("file")) {
                     decodedJs = d
                     break
@@ -2294,7 +2330,6 @@ class AnimeONProvider : MainAPI() {
             if (decodedJs.isNotEmpty()) {
                 val keyRegex = Regex("""var\s+k\s*=\s*["']([^"']+)["']""")
                 val xorKey = keyRegex.find(decodedJs)?.groupValues?.get(1)
-
                 var subtitleUrl: String? = null
 
                 if (!xorKey.isNullOrEmpty()) {
@@ -2310,12 +2345,7 @@ class AnimeONProvider : MainAPI() {
 
                         if (entryMatches.isNotEmpty()) {
                             entryMatches.forEach { m2 ->
-                                subtitleEntries.add(
-                                    Pair(
-                                        m2.groupValues[1],
-                                        m2.groupValues[2].trim(',', ' ')
-                                    )
-                                )
+                                subtitleEntries.add(Pair(m2.groupValues[1], m2.groupValues[2].trim(',', ' ')))
                             }
                         } else if (subtitleDecoded.startsWith("http")) {
                             subtitleEntries.add(Pair("UA", subtitleDecoded.trim()))
@@ -2328,30 +2358,19 @@ class AnimeONProvider : MainAPI() {
 
                     val encodedRegex = Regex("""(\w+)\s*\(\s*["']([A-Za-z0-9+/=]+)["']\s*\)""")
                     val encMatches = encodedRegex.findAll(decodedJs).toList()
-
                     val allDecoded = mutableListOf<String>()
 
                     for (match in encMatches) {
                         val decoded = moonDecrypt(match.groupValues[2], xorKey)
-
                         if (decoded.isNotEmpty()) {
                             allDecoded.add(decoded)
                         }
                     }
 
                     for (decoded in allDecoded) {
-                        val isVideoOrPlaylist = decoded.contains(".m3u8") ||
-                                decoded.contains(".mp4") ||
-                                decoded.contains(".webm") ||
-                                decoded.startsWith("[")
-
-                        val isMoonDomain = decoded.contains("mooncdn") ||
-                                decoded.contains("moonanime.net/content") ||
-                                decoded.contains("s.moonanime.net")
-
-                        val isStaticAsset = decoded.contains(
-                            Regex("""\.(jpg|jpeg|png|webp|avif|vtt|srt|txt)(\?|$)""", RegexOption.IGNORE_CASE)
-                        )
+                        val isVideoOrPlaylist = decoded.contains(".m3u8") || decoded.contains(".mp4") || decoded.contains(".webm") || decoded.startsWith("[")
+                        val isMoonDomain = decoded.contains("mooncdn") || decoded.contains("moonanime.net/content") || decoded.contains("s.moonanime.net")
+                        val isStaticAsset = decoded.contains(Regex("""\.(jpg|jpeg|png|webp|avif|vtt|srt|txt)(\?|$)""", RegexOption.IGNORE_CASE))
 
                         if ((isVideoOrPlaylist || isMoonDomain) && !isStaticAsset) {
                             return Pair(decoded, subtitleUrl)
@@ -2364,7 +2383,6 @@ class AnimeONProvider : MainAPI() {
 
                 if (contentMatch != null && contentMatch.isNotEmpty() && !contentMatch.contains(Regex("""\.(jpg|jpeg|png)$"""))) {
                     val resolved = resolveMoonContent(contentMatch)
-
                     if (!resolved.isNullOrEmpty()) {
                         return Pair(resolved, subtitleUrl)
                     }
@@ -2381,7 +2399,6 @@ class AnimeONProvider : MainAPI() {
             for (quality in listOf(1080, 720, 480, 360)) {
                 val contentUrl = "https://s.moonanime.net/content/v/$hash/$quality/"
                 val resolved = resolveMoonContent(contentUrl)
-
                 if (!resolved.isNullOrEmpty()) {
                     qualityResults.add("[${quality}p]$resolved")
                 }
@@ -2418,21 +2435,10 @@ class AnimeONProvider : MainAPI() {
                             val out = client.getOutputStream()
 
                             if (body != null) {
-                                out.write(
-                                    (
-                                        "HTTP/1.1 200 OK\r\n" +
-                                        "Content-Type: text/vtt; charset=utf-8\r\n" +
-                                        "Content-Length: ${body.size}\r\n" +
-                                        "Access-Control-Allow-Origin: *\r\n" +
-                                        "Connection: close\r\n\r\n"
-                                    ).toByteArray()
-                                )
+                                out.write(("HTTP/1.1 200 OK\r\nContent-Type: text/vtt; charset=utf-8\r\nContent-Length: ${body.size}\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n").toByteArray())
                                 out.write(body)
                             } else {
-                                out.write(
-                                    "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-                                        .toByteArray()
-                                )
+                                out.write("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray())
                             }
 
                             out.flush()
@@ -2448,7 +2454,6 @@ class AnimeONProvider : MainAPI() {
 
     private suspend fun invokeSubtitles(subUrl: String?, subtitleCallback: (SubtitleFile) -> Unit) {
         if (subUrl == null) return
-
         ensureSubtitleProxy()
 
         subUrl.split("|||").forEach { entry ->
@@ -2473,9 +2478,7 @@ class AnimeONProvider : MainAPI() {
 
                     val key = java.util.UUID.randomUUID().toString().replace("-", "")
                     subtitleCache[key] = bytes
-
                     val proxyUrl = "http://127.0.0.1:$subtitleProxyPort/sub?$key"
-
                     subtitleCallback.invoke(newSubtitleFile(lang, proxyUrl))
                 } catch (e: Exception) {
                     subtitleCallback.invoke(newSubtitleFile(lang, url))
@@ -2486,11 +2489,9 @@ class AnimeONProvider : MainAPI() {
 
     private fun extractIntFromString(string: String): Int? {
         val value = Regex("(\\d+)").findAll(string).lastOrNull() ?: return null
-
         if (value.value[0].toString() == "0") {
             return value.value.drop(1).toIntOrNull()
         }
-
         return value.value.toIntOrNull()
     }
 }
