@@ -88,6 +88,38 @@ class AnimeONProvider : MainAPI() {
         )
     }
 
+    private val hevcMain10Supported: Boolean by lazy { checkHevcMain10() }
+
+    private fun checkHevcMain10(): Boolean {
+        if (android.os.Build.VERSION.SDK_INT < 24) return false
+        return try {
+            val list = android.media.MediaCodecList(android.media.MediaCodecList.REGULAR_CODECS)
+            list.codecInfos.any { info ->
+                if (info.isEncoder) {
+                    false
+                } else {
+                    try {
+                        val caps = info.getCapabilitiesForType("video/hevc") ?: return@any false
+                        val hasMain10 = caps.profileLevels?.any {
+                            it.profile == android.media.MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10
+                        } == true
+                        hasMain10 && caps.isSizeAndRateSupported(1920, 1080, 30)
+                    } catch (e: Exception) {
+                        false
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    private fun pickFenixMaster(hlsUrl: String?, avcUrl: String?): String? {
+        val h = hlsUrl ?: return avcUrl
+        if (hevcMain10Supported) return h
+        return avcUrl ?: h
+    }
+
     private var posterProxyPort: Int = 0
     private val posterCache = java.util.concurrent.ConcurrentHashMap<String, ByteArray>()
     private var moonCookieHeader: String? = null
@@ -1561,11 +1593,12 @@ class AnimeONProvider : MainAPI() {
                                 if (hlsUrl.isNullOrEmpty()) return@forEach
                                 val label = track.label ?: track.language ?: "Fenix"
                                 val trackName = "$label · Fenix"
+                                val master = pickFenixMaster(hlsUrl, track.cast_avc_url) ?: return@forEach
 
                                 safeCallback(ExtractorLink(
                                     source = name,
                                     name = trackName,
-                                    url = addToken(hlsUrl),
+                                    url = addToken(master),
                                     referer = fenixReferer,
                                     quality = com.lagradost.cloudstream3.utils.Qualities.Unknown.value,
                                     type = com.lagradost.cloudstream3.utils.ExtractorLinkType.M3U8,
@@ -1573,11 +1606,12 @@ class AnimeONProvider : MainAPI() {
                                 ))
                             }
 
-                            if (ep.tracks.isNullOrEmpty() && !ep.hls_master_url.isNullOrEmpty()) {
+                            val fallbackMaster = pickFenixMaster(ep.hls_master_url, ep.cast_avc_url)
+                            if (ep.tracks.isNullOrEmpty() && !fallbackMaster.isNullOrEmpty()) {
                                 safeCallback(ExtractorLink(
                                     source = name,
                                     name = sourceName,
-                                    url = addToken(ep.hls_master_url),
+                                    url = addToken(fallbackMaster),
                                     referer = fenixReferer,
                                     quality = com.lagradost.cloudstream3.utils.Qualities.Unknown.value,
                                     type = com.lagradost.cloudstream3.utils.ExtractorLinkType.M3U8,
@@ -1757,11 +1791,12 @@ class AnimeONProvider : MainAPI() {
                                                     if (hlsUrl.isNullOrEmpty()) return@forEach
                                                     val label = track.label ?: track.language ?: "Fenix"
                                                     val trackName = "$label · Fenix"
+                                                    val master = pickFenixMaster(hlsUrl, track.cast_avc_url) ?: return@forEach
 
                                                     safeCallback(ExtractorLink(
                                                         source = name,
                                                         name = trackName,
-                                                        url = addToken(hlsUrl),
+                                                        url = addToken(master),
                                                         referer = fenixReferer,
                                                         quality = com.lagradost.cloudstream3.utils.Qualities.Unknown.value,
                                                         type = com.lagradost.cloudstream3.utils.ExtractorLinkType.M3U8,
@@ -1769,11 +1804,12 @@ class AnimeONProvider : MainAPI() {
                                                     ))
                                                 }
 
-                                                if (ep.tracks.isNullOrEmpty() && !ep.hls_master_url.isNullOrEmpty()) {
+                                                val fallbackMaster = pickFenixMaster(ep.hls_master_url, ep.cast_avc_url)
+                                                if (ep.tracks.isNullOrEmpty() && !fallbackMaster.isNullOrEmpty()) {
                                                     safeCallback(ExtractorLink(
                                                         source = name,
                                                         name = sourceName,
-                                                        url = addToken(ep.hls_master_url),
+                                                        url = addToken(fallbackMaster),
                                                         referer = fenixReferer,
                                                         quality = com.lagradost.cloudstream3.utils.Qualities.Unknown.value,
                                                         type = com.lagradost.cloudstream3.utils.ExtractorLinkType.M3U8,
@@ -1880,11 +1916,12 @@ class AnimeONProvider : MainAPI() {
                                             if (hlsUrl.isNullOrEmpty()) return@forEach
                                             val label = track.label ?: track.language ?: "Fenix"
                                             val trackName = "$label · Fenix"
+                                            val master = pickFenixMaster(hlsUrl, track.cast_avc_url) ?: return@forEach
 
                                             safeCallback(ExtractorLink(
                                                 source = name,
                                                 name = trackName,
-                                                url = addToken(hlsUrl),
+                                                url = addToken(master),
                                                 referer = fenixReferer,
                                                 quality = com.lagradost.cloudstream3.utils.Qualities.Unknown.value,
                                                 type = com.lagradost.cloudstream3.utils.ExtractorLinkType.M3U8,
@@ -1892,11 +1929,12 @@ class AnimeONProvider : MainAPI() {
                                             ))
                                         }
 
-                                        if (epDetails.tracks.isNullOrEmpty() && !epDetails.hls_master_url.isNullOrEmpty()) {
+                                        val fallbackMaster = pickFenixMaster(epDetails.hls_master_url, epDetails.cast_avc_url)
+                                        if (epDetails.tracks.isNullOrEmpty() && !fallbackMaster.isNullOrEmpty()) {
                                             safeCallback(ExtractorLink(
                                                 source = name,
                                                 name = sourceName,
-                                                url = addToken(epDetails.hls_master_url),
+                                                url = addToken(fallbackMaster),
                                                 referer = fenixReferer,
                                                 quality = com.lagradost.cloudstream3.utils.Qualities.Unknown.value,
                                                 type = com.lagradost.cloudstream3.utils.ExtractorLinkType.M3U8,
