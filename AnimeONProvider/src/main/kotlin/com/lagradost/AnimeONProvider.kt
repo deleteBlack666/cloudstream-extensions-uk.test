@@ -91,27 +91,28 @@ class AnimeONProvider : MainAPI() {
     private val hevcMain10Supported: Boolean by lazy { checkHevcMain10() }
 
     private fun checkHevcMain10(): Boolean {
-        if (android.os.Build.VERSION.SDK_INT < 24) return false
-        return try {
-            val list = android.media.MediaCodecList(android.media.MediaCodecList.REGULAR_CODECS)
-            list.codecInfos.any { info ->
-                if (info.isEncoder) {
+    if (android.os.Build.VERSION.SDK_INT < 21) return false
+    return try {
+        val list = android.media.MediaCodecList(android.media.MediaCodecList.REGULAR_CODECS)
+        list.codecInfos.any { info ->
+            if (info.isEncoder) {
+                false
+            } else {
+                try {
+                    val caps = info.getCapabilitiesForType("video/hevc") ?: return@any false
+                    val videoCaps = caps.videoCapabilities ?: return@any false
+                    val hasMain10 = caps.profileLevels?.any {
+                        it.profile == android.media.MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10
+                    } == true
+                    hasMain10 && videoCaps.isSizeSupported(1920, 1080)
+                } catch (e: Exception) {
                     false
-                } else {
-                    try {
-                        val caps = info.getCapabilitiesForType("video/hevc") ?: return@any false
-                        val hasMain10 = caps.profileLevels?.any {
-                            it.profile == android.media.MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10
-                        } == true
-                        hasMain10 && caps.isSizeAndRateSupported(1920, 1080, 30)
-                    } catch (e: Exception) {
-                        false
-                    }
                 }
             }
-        } catch (e: Exception) {
-            false
         }
+    } catch (e: Exception) {
+        false
+    }
     }
 
     private fun pickFenixMaster(hlsUrl: String?, avcUrl: String?): String? {
