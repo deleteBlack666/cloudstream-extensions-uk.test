@@ -91,40 +91,40 @@ class AnimeONProvider : MainAPI() {
     private val hevcMain10Supported: Boolean by lazy { checkHevcMain10() }
 
     private fun checkHevcMain10(): Boolean {
-    if (android.os.Build.VERSION.SDK_INT < 21) return false
-    return try {
-        val list = android.media.MediaCodecList(android.media.MediaCodecList.REGULAR_CODECS)
-        list.codecInfos.any { info ->
-            if (info.isEncoder) {
-                false
-            } else {
-                try {
-                    val caps = info.getCapabilitiesForType("video/hevc") ?: return@any false
-                    val videoCaps = caps.videoCapabilities ?: return@any false
-                    val hasMain10 = caps.profileLevels?.any {
-                        it.profile == android.media.MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10
-                    } == true
-                    hasMain10 && videoCaps.isSizeSupported(1920, 1080)
-                } catch (e: Exception) {
+        if (android.os.Build.VERSION.SDK_INT < 21) return false
+        return try {
+            val list = android.media.MediaCodecList(android.media.MediaCodecList.REGULAR_CODECS)
+            list.codecInfos.any { info ->
+                if (info.isEncoder) {
                     false
+                } else {
+                    try {
+                        val caps = info.getCapabilitiesForType("video/hevc") ?: return@any false
+                        val videoCaps = caps.videoCapabilities ?: return@any false
+                        val hasMain10 = caps.profileLevels?.any {
+                            it.profile == android.media.MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10
+                        } == true
+                        hasMain10 && videoCaps.isSizeSupported(1920, 1080)
+                    } catch (e: Exception) {
+                        false
+                    }
                 }
             }
+        } catch (e: Exception) {
+            false
         }
-    } catch (e: Exception) {
-        false
-    }
     }
 
     private fun pickFenixMaster(hlsUrl: String?, avcUrl: String?): String? {
-    if (hevcMain10Supported && !hlsUrl.isNullOrEmpty()) return hlsUrl
-    if (!avcUrl.isNullOrEmpty()) return avcUrl
-    return hlsUrl
+        if (hevcMain10Supported && !hlsUrl.isNullOrEmpty()) return hlsUrl
+        if (!avcUrl.isNullOrEmpty()) return avcUrl
+        return hlsUrl
     }
 
     private var posterProxyPort: Int = 0
     private val posterCache = java.util.concurrent.ConcurrentHashMap<String, ByteArray>()
     private var moonCookieHeader: String? = null
-    private var lastFenixPlaylist: FenixPlaylist? = null
+    private val fenixPlaylistCache = java.util.concurrent.ConcurrentHashMap<String, FenixPlaylist>()
     private var lastFenixMediaAccess: FenixMediaAccess? = null
 
     private val episodePosterCache = java.util.concurrent.ConcurrentHashMap<String, String>()
@@ -909,8 +909,8 @@ class AnimeONProvider : MainAPI() {
         if (inlineMatch != null) {
             try {
                 val p = AppUtils.parseJson<FenixPlaylist>(inlineMatch.groupValues[1])
-                lastFenixPlaylist = p
                 if (!p.slug.isNullOrEmpty() || p.playback != null) {
+                    fenixPlaylistCache[code] = p
                     return p
                 }
             } catch (e: Exception) {
@@ -938,7 +938,9 @@ class AnimeONProvider : MainAPI() {
             ).text
 
             val playlist = AppUtils.parseJson<FenixPlaylist>(json)
-            lastFenixPlaylist = playlist
+            if (!playlist.slug.isNullOrEmpty()) {
+                fenixPlaylistCache[code] = playlist
+            }
             playlist
         } catch (e: Exception) {
             null
@@ -965,7 +967,7 @@ class AnimeONProvider : MainAPI() {
             try {
                 val p = AppUtils.parseJson<FenixPlaylist>(m.groupValues[1])
                 if (!p.slug.isNullOrEmpty() || p.playback != null) {
-                    lastFenixPlaylist = p
+                    fenixPlaylistCache[code] = p
                     return p
                 }
             } catch (e: Exception) {
@@ -988,11 +990,29 @@ class AnimeONProvider : MainAPI() {
 
         return try {
             val playlist = AppUtils.parseJson<FenixPlaylist>(json)
-            lastFenixPlaylist = playlist
+            if (!playlist.slug.isNullOrEmpty()) {
+                fenixPlaylistCache[code] = playlist
+            }
             playlist
         } catch (e: Exception) {
             null
         }
+    }
+
+    private suspend fun getFenixPlaylist(videoUrl: String): FenixPlaylist? {
+        val code = fenixExtractCode(videoUrl) ?: return null
+        fenixPlaylistCache[code]?.let { return it }
+        val p = fetchFenixPlaylist(videoUrl)
+        if (p != null && !p.slug.isNullOrEmpty()) fenixPlaylistCache[code] = p
+        return p
+    }
+
+    private fun getFenixPlaylistSync(videoUrl: String): FenixPlaylist? {
+        val code = fenixExtractCode(videoUrl) ?: return null
+        fenixPlaylistCache[code]?.let { return it }
+        val p = fetchFenixPlaylistSync(videoUrl)
+        if (p != null && !p.slug.isNullOrEmpty()) fenixPlaylistCache[code] = p
+        return p
     }
 
     private suspend fun fetchFenixEpisodePlayback(
@@ -1064,12 +1084,10 @@ class AnimeONProvider : MainAPI() {
         val videoUrl = fetchEpisodeVideoUrlSync(episodeId) ?: return null
 
         if (videoUrl.contains("fenixplay.xyz")) {
-            if (lastFenixPlaylist == null) {
-                fetchFenixPlaylistSync(videoUrl)
-            }
+            val playlist = getFenixPlaylistSync(videoUrl)
 
-            val slug = lastFenixPlaylist?.slug
-            val playbackToken = lastFenixPlaylist?.playback?.token
+            val slug = playlist?.slug
+            val playbackToken = playlist?.playback?.token
             val epNum = fenixExtractEpisodeNumber(videoUrl) ?: 1
             val edition = fenixExtractEdition(videoUrl)
 
@@ -1560,12 +1578,10 @@ class AnimeONProvider : MainAPI() {
 
             try {
                 if (isFenix && videoUrl.contains("fenixplay.xyz")) {
-                    if (lastFenixPlaylist == null) {
-                        fetchFenixPlaylist(videoUrl)
-                    }
+                    val playlist = getFenixPlaylist(videoUrl)
 
-                    val slug = lastFenixPlaylist?.slug
-                    val playbackToken = lastFenixPlaylist?.playback?.token
+                    val slug = playlist?.slug
+                    val playbackToken = playlist?.playback?.token
                     val epNum = fenixExtractEpisodeNumber(videoUrl) ?: source.episodeNum
                     val edition = fenixExtractEdition(videoUrl)
 
@@ -1758,12 +1774,10 @@ class AnimeONProvider : MainAPI() {
                                     val finalUrl = videoUrl ?: fileUrl!!
 
                                     if (isFenix && finalUrl.contains("fenixplay.xyz")) {
-                                        if (lastFenixPlaylist == null) {
-                                            fetchFenixPlaylist(finalUrl)
-                                        }
+                                        val playlist = getFenixPlaylist(finalUrl)
 
-                                        val slug = lastFenixPlaylist?.slug
-                                        val playbackToken = lastFenixPlaylist?.playback?.token
+                                        val slug = playlist?.slug
+                                        val playbackToken = playlist?.playback?.token
                                         val epNum = fenixExtractEpisodeNumber(finalUrl) ?: 1
                                         val edition = fenixExtractEdition(finalUrl)
 
@@ -1883,12 +1897,10 @@ class AnimeONProvider : MainAPI() {
 
                         try {
                             if (isFenix && videoUrl.contains("fenixplay.xyz")) {
-                                if (lastFenixPlaylist == null) {
-                                    fetchFenixPlaylist(videoUrl)
-                                }
+                                val playlist = getFenixPlaylist(videoUrl)
 
-                                val slug = lastFenixPlaylist?.slug
-                                val playbackToken = lastFenixPlaylist?.playback?.token
+                                val slug = playlist?.slug
+                                val playbackToken = playlist?.playback?.token
                                 val epNum = fenixExtractEpisodeNumber(videoUrl) ?: ep.episode
                                 val edition = fenixExtractEdition(videoUrl)
 
