@@ -116,9 +116,9 @@ class AnimeONProvider : MainAPI() {
     }
 
     private fun pickFenixMaster(hlsUrl: String?, avcUrl: String?): String? {
-        val h = hlsUrl ?: return avcUrl
-        if (hevcMain10Supported) return h
-        return avcUrl ?: h
+    if (hevcMain10Supported && !hlsUrl.isNullOrEmpty()) return hlsUrl
+    if (!avcUrl.isNullOrEmpty()) return avcUrl
+    return hlsUrl
     }
 
     private var posterProxyPort: Int = 0
