@@ -88,6 +88,14 @@ class AnimeONProvider : MainAPI() {
         )
     }
 
+    private data class MoonResolved(val url: String, val expires: Long)
+
+    private val moonContentCache = java.util.concurrent.ConcurrentHashMap<String, MoonResolved>()
+
+    private fun moonUrlExpires(url: String): Long {
+        return Regex("""[?&]expires=(\d+)""").find(url)?.groupValues?.get(1)?.toLongOrNull() ?: 0L
+    }
+
     private val hevcMain10Supported: Boolean by lazy { checkHevcMain10() }
 
     private fun checkHevcMain10(): Boolean {
@@ -1117,6 +1125,12 @@ class AnimeONProvider : MainAPI() {
     }
 
     private suspend fun resolveMoonContent(contentUrl: String): String? {
+        val now = System.currentTimeMillis() / 1000
+        val cached = moonContentCache[contentUrl]
+        if (cached != null && (cached.expires == 0L || cached.expires - 60 > now)) {
+            return cached.url
+        }
+
         return try {
             val allCookies = mutableMapOf<String, String>()
             for (base in moonBaseDomains) {
@@ -1157,10 +1171,14 @@ class AnimeONProvider : MainAPI() {
             val location = response.headers["location"] ?: response.headers["Location"]
 
             if (!location.isNullOrEmpty()) {
+                moonContentCache[contentUrl] = MoonResolved(location, moonUrlExpires(location))
                 location
             } else {
                 val body = response.text.trim()
-                if (body.startsWith("http")) body else null
+                if (body.startsWith("http")) {
+                    moonContentCache[contentUrl] = MoonResolved(body, moonUrlExpires(body))
+                    body
+                } else null
             }
         } catch (e: Exception) {
             null
@@ -1343,6 +1361,7 @@ class AnimeONProvider : MainAPI() {
 
                 val episodeSources = java.util.concurrent.ConcurrentHashMap<Int, MutableList<EpisodeSource>>()
                 val seenSourceKeys = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+                val seenEpNumKeys = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
                 val poolSize = (translations.sumOf { it.player.size } * 2).coerceIn(4, 24)
                 val episodeExecutor = java.util.concurrent.Executors.newFixedThreadPool(poolSize)
@@ -1398,6 +1417,9 @@ class AnimeONProvider : MainAPI() {
                             for (ep in result.episodes) {
                                 val key = "${result.translationName}|${result.playerName}|${ep.id}"
                                 if (!seenSourceKeys.add(key)) continue
+
+                                val epNumKey = "${result.translationName}|${result.playerName}|${ep.episode}"
+                                if (ep.episode > 0 && !seenEpNumKeys.add(epNumKey)) continue
 
                                 val sources = episodeSources.getOrPut(ep.episode) { mutableListOf() }
                                 sources.add(
@@ -1561,8 +1583,7 @@ class AnimeONProvider : MainAPI() {
 
         val seenLinks = mutableSetOf<String>()
         val safeCallback: (ExtractorLink) -> Unit = { link ->
-            val cleanUrl = link.url.substringBefore("?")
-            val key = "${link.name}|${link.quality}|$cleanUrl"
+            val key = "${link.name}|${link.quality}"
             if (seenLinks.add(key)) {
                 callback(link)
             }
@@ -1707,8 +1728,7 @@ class AnimeONProvider : MainAPI() {
 
         val seenLinks = mutableSetOf<String>()
         val safeCallback: (ExtractorLink) -> Unit = { link ->
-            val cleanUrl = link.url.substringBefore("?")
-            val key = "${link.name}|${link.quality}|$cleanUrl"
+            val key = "${link.name}|${link.quality}"
             if (seenLinks.add(key)) {
                 callback(link)
             }
@@ -1723,6 +1743,7 @@ class AnimeONProvider : MainAPI() {
                 for (player in translation.player) {
                     val collected = mutableListOf<FundubEpisode>()
                     val seenIDs = mutableSetOf<Int>()
+                    val seenEpNums = mutableSetOf<Int>()
 
                     val baseUrl = "$mainUrl/api/player/$animeId/episodes?take=1000&playerId=${player.id}&translationId=$translationId"
 
@@ -1749,7 +1770,7 @@ class AnimeONProvider : MainAPI() {
                                 null
                             }
                             if (eps.isNullOrEmpty()) break
-                            val newEps = eps.filter { seenIDs.add(it.id) }
+                            val newEps = eps.filter { seenIDs.add(it.id) && (it.episode <= 0 || seenEpNums.add(it.episode)) }
                             collected.addAll(newEps)
                             if (eps.size < 1000) break
                             skip += 1000
