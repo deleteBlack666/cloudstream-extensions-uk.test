@@ -100,8 +100,7 @@ class AnimeONProvider : MainAPI() {
     private val GLOBAL_LINK_TTL_MS = 60_000L
 
     private fun normalizeLinkUrl(url: String): String {
-        val path = url.substringBefore("?").substringAfterLast("/")
-        return if (path.endsWith(".m3u8")) path else url.substringBefore("?")
+        return url.substringBefore("?")
     }
 
     private fun isGlobalDuplicate(name: String, quality: Int, url: String): Boolean {
@@ -1691,7 +1690,12 @@ class AnimeONProvider : MainAPI() {
                             streamUrl = videoUrl,
                             referer = "https://ashdi.vip"
                         )
-                        streams.forEach { safeCallback(fixMovieExtractorLink(it, sourceName)) }
+                        val filtered = streams.dropLast(1)
+                        if (filtered.isNotEmpty()) {
+                            filtered.forEach { safeCallback(fixMovieExtractorLink(it, sourceName)) }
+                        } else {
+                            streams.forEach { safeCallback(fixMovieExtractorLink(it, sourceName)) }
+                        }
                         foundAny = true
                     }
                 } else {
@@ -1703,7 +1707,12 @@ class AnimeONProvider : MainAPI() {
                                 referer = "${moonBaseFromUrl(videoUrl)}/",
                                 headers = moonVideoHeaders(videoUrl)
                             )
-                            streams.forEach { safeCallback(fixMovieExtractorLink(it, sourceName)) }
+                            val filtered = streams.dropLast(1)
+                            if (filtered.isNotEmpty()) {
+                                filtered.forEach { safeCallback(fixMovieExtractorLink(it, sourceName)) }
+                            } else {
+                                streams.forEach { safeCallback(fixMovieExtractorLink(it, sourceName)) }
+                            }
                             foundAny = true
                         } else {
                             val (rawFile, subUrl) = getMoonFile(videoUrl)
@@ -1875,7 +1884,12 @@ class AnimeONProvider : MainAPI() {
                                                 streamUrl = finalUrl,
                                                 referer = "https://ashdi.vip"
                                             )
-                                            streams.forEach { safeCallback(fixMovieExtractorLink(it, sourceName)) }
+                                            val filtered = streams.dropLast(1)
+                                            if (filtered.isNotEmpty()) {
+                                                filtered.forEach { safeCallback(fixMovieExtractorLink(it, sourceName)) }
+                                            } else {
+                                                streams.forEach { safeCallback(fixMovieExtractorLink(it, sourceName)) }
+                                            }
                                             foundAny = true
                                         }
                                     } else {
@@ -1887,7 +1901,12 @@ class AnimeONProvider : MainAPI() {
                                                     referer = "${moonBaseFromUrl(finalUrl)}/",
                                                     headers = moonVideoHeaders(finalUrl)
                                                 )
-                                                streams.forEach { safeCallback(fixMovieExtractorLink(it, sourceName)) }
+                                                val filtered = streams.dropLast(1)
+                                                if (filtered.isNotEmpty()) {
+                                                    filtered.forEach { safeCallback(fixMovieExtractorLink(it, sourceName)) }
+                                                } else {
+                                                    streams.forEach { safeCallback(fixMovieExtractorLink(it, sourceName)) }
+                                                }
                                                 foundAny = true
                                             } else {
                                                 val (rawFile, subUrl) = getMoonFile(finalUrl)
@@ -1988,7 +2007,12 @@ class AnimeONProvider : MainAPI() {
                                         streamUrl = videoUrl,
                                         referer = "https://ashdi.vip"
                                     )
-                                    streams.forEach { safeCallback(fixMovieExtractorLink(it, sourceName)) }
+                                    val filtered = streams.dropLast(1)
+                                    if (filtered.isNotEmpty()) {
+                                        filtered.forEach { safeCallback(fixMovieExtractorLink(it, sourceName)) }
+                                    } else {
+                                        streams.forEach { safeCallback(fixMovieExtractorLink(it, sourceName)) }
+                                    }
                                     foundAny = true
                                 }
                             } else {
@@ -2000,7 +2024,12 @@ class AnimeONProvider : MainAPI() {
                                             referer = "${moonBaseFromUrl(videoUrl)}/",
                                             headers = moonVideoHeaders(videoUrl)
                                         )
-                                        streams.forEach { safeCallback(fixMovieExtractorLink(it, sourceName)) }
+                                        val filtered = streams.dropLast(1)
+                                        if (filtered.isNotEmpty()) {
+                                            filtered.forEach { safeCallback(fixMovieExtractorLink(it, sourceName)) }
+                                        } else {
+                                            streams.forEach { safeCallback(fixMovieExtractorLink(it, sourceName)) }
+                                        }
                                         foundAny = true
                                     } else {
                                         val (rawFile, subUrl) = getMoonFile(videoUrl)
@@ -2144,7 +2173,9 @@ class AnimeONProvider : MainAPI() {
                             referer = "${moonBaseFromUrl(qUrl)}/",
                             headers = headers
                         )
-                        streams.forEach {
+                        val filtered = streams.dropLast(1)
+                        val finalStreams = if (filtered.isNotEmpty()) filtered else streams
+                        finalStreams.forEach {
                             callback(fixMovieExtractorLink(it, sourceName))
                         }
                     }
@@ -2185,7 +2216,9 @@ class AnimeONProvider : MainAPI() {
                 referer = "${moonBaseFromUrl(rawFile)}/",
                 headers = headers
             )
-            streams.forEach {
+            val filtered = streams.dropLast(1)
+            val finalStreams = if (filtered.isNotEmpty()) filtered else streams
+            finalStreams.forEach {
                 callback(fixMovieExtractorLink(it, sourceName))
             }
         } else if (rawFile.contains("moonanime")) {
@@ -2258,7 +2291,9 @@ class AnimeONProvider : MainAPI() {
                             streamUrl = masterUrl,
                             referer = "https://ashdi.vip/"
                         )
-                        streams.forEach { link ->
+                        val filtered = streams.dropLast(1)
+                        val finalStreams = if (filtered.isNotEmpty()) filtered else streams
+                        finalStreams.forEach { link ->
                             callback(fixMovieExtractorLink(link, sourceName))
                         }
                     }
