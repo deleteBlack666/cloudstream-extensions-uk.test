@@ -96,6 +96,23 @@ class AnimeONProvider : MainAPI() {
         return Regex("""[?&]expires=(\d+)""").find(url)?.groupValues?.get(1)?.toLongOrNull() ?: 0L
     }
 
+    private val globalLinkCache = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private val GLOBAL_LINK_TTL_MS = 60_000L
+
+    private fun normalizeLinkUrl(url: String): String {
+        return url.substringBefore("?")
+    }
+
+    private fun isGlobalDuplicate(name: String, quality: Int, url: String): Boolean {
+        val normalized = normalizeLinkUrl(url)
+        val key = "$name|$quality|$normalized"
+        val now = System.currentTimeMillis()
+        val prev = globalLinkCache[key]
+        if (prev != null && now - prev < GLOBAL_LINK_TTL_MS) return true
+        globalLinkCache[key] = now
+        return false
+    }
+
     private val hevcMain10Supported: Boolean by lazy { checkHevcMain10() }
 
     private fun checkHevcMain10(): Boolean {
@@ -1581,10 +1598,8 @@ class AnimeONProvider : MainAPI() {
 
         var foundAny = false
 
-        val seenLinks = mutableSetOf<String>()
         val safeCallback: (ExtractorLink) -> Unit = { link ->
-            val key = "${link.name}|${link.quality}"
-            if (seenLinks.add(key)) {
+            if (!isGlobalDuplicate(link.name, link.quality, link.url)) {
                 callback(link)
             }
         }
@@ -1726,10 +1741,8 @@ class AnimeONProvider : MainAPI() {
 
         var foundAny = false
 
-        val seenLinks = mutableSetOf<String>()
         val safeCallback: (ExtractorLink) -> Unit = { link ->
-            val key = "${link.name}|${link.quality}"
-            if (seenLinks.add(key)) {
+            if (!isGlobalDuplicate(link.name, link.quality, link.url)) {
                 callback(link)
             }
         }
