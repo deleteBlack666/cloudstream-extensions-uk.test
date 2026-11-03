@@ -173,8 +173,6 @@ class AnimeONProvider : MainAPI() {
         .readTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
         .build()
 
-    private val backgroundScope = CoroutineScope(Dispatchers.IO)
-
     private fun currentSeasonLabel(): String {
         val cal = java.util.Calendar.getInstance()
         val month = cal.get(java.util.Calendar.MONTH) + 1
@@ -1619,20 +1617,6 @@ class AnimeONProvider : MainAPI() {
 
         val franchise = buildFranchise(animeId)
 
-        val sequence = episodes.map { it.data }
-        episodeSequences[animeId] = sequence
-        sequence.forEachIndexed { idx, d -> episodeDataIndex[d] = animeId to idx }
-
-        if (sequence.isNotEmpty()) {
-            val firstData = sequence.first()
-            backgroundScope.launch {
-                try {
-                    resolveEpisodeToCache(firstData)
-                } catch (_: Exception) {
-                }
-            }
-        }
-
         return if (tvType == TvType.Anime || tvType == TvType.OVA) {
             newAnimeLoadResponse(animeJSON.titleUa, "$mainUrl/anime/$animeId", tvType) {
                 this.posterUrl = posterUrl
@@ -1685,8 +1669,6 @@ class AnimeONProvider : MainAPI() {
     )
 
     private val episodeResolutionCache = java.util.concurrent.ConcurrentHashMap<String, ResolvedEpisode>()
-    private val episodeSequences = java.util.concurrent.ConcurrentHashMap<Int, List<String>>()
-    private val episodeDataIndex = java.util.concurrent.ConcurrentHashMap<String, Pair<Int, Int>>()
 
     private fun isResolvedExpired(resolved: ResolvedEpisode): Boolean {
         val now = System.currentTimeMillis() / 1000
@@ -1848,25 +1830,6 @@ class AnimeONProvider : MainAPI() {
         }
     }
 
-    private fun prefetchNext(currentData: String) {
-        val loc = episodeDataIndex[currentData] ?: return
-        val seq = episodeSequences[loc.first] ?: return
-        val nextIdx = loc.second + 1
-        if (nextIdx >= seq.size) return
-
-        val nextData = seq[nextIdx]
-        episodeResolutionCache[nextData]?.let {
-            if (it.links.isNotEmpty() && !isResolvedExpired(it)) return
-        }
-
-        backgroundScope.launch {
-            try {
-                resolveEpisodeToCache(nextData)
-            } catch (_: Exception) {
-            }
-        }
-    }
-
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -1884,8 +1847,6 @@ class AnimeONProvider : MainAPI() {
 
         resolved?.links?.forEach { callback(it) }
         resolved?.subtitles?.forEach { subtitleCallback(it) }
-
-        prefetchNext(data)
 
         return resolved?.links?.isNotEmpty() == true
     }
