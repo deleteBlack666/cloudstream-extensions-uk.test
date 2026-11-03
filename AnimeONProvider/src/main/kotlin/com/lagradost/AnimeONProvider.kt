@@ -96,21 +96,8 @@ class AnimeONProvider : MainAPI() {
         return Regex("""[?&]expires=(\d+)""").find(url)?.groupValues?.get(1)?.toLongOrNull() ?: 0L
     }
 
-    private val globalLinkCache = java.util.concurrent.ConcurrentHashMap<String, Long>()
-    private val GLOBAL_LINK_TTL_MS = 60_000L
-
     private fun normalizeLinkUrl(url: String): String {
         return url.substringBefore("?")
-    }
-
-    private fun isGlobalDuplicate(name: String, quality: Int, url: String): Boolean {
-        val normalized = normalizeLinkUrl(url)
-        val key = "$name|$quality|$normalized"
-        val now = System.currentTimeMillis()
-        val prev = globalLinkCache[key]
-        if (prev != null && now - prev < GLOBAL_LINK_TTL_MS) return true
-        globalLinkCache[key] = now
-        return false
     }
 
     private val hevcMain10Supported: Boolean by lazy { checkHevcMain10() }
@@ -733,7 +720,7 @@ class AnimeONProvider : MainAPI() {
 
     private fun fetchEpisodeVideoUrlSync(episodeId: Int): String? {
         episodeVideoUrlCache[episodeId]?.let { return it }
-        
+
         val json = httpGetText(
             "$mainUrl/api/player/$episodeId/episode",
             mapOf(
@@ -1231,11 +1218,7 @@ class AnimeONProvider : MainAPI() {
 
         val rawPosterUrl = when {
             videoUrl.contains("ashdi.vip") -> getAshdiRawPosterUrl(videoUrl)
-            videoUrl.contains("moonanime") -> {
-                // Для moonanime потрібен suspend виклик, але тут синхронний контекст
-                // Тому повертаємо null і покладаємося на кеш
-                null
-            }
+            videoUrl.contains("moonanime") -> null
             else -> null
         } ?: return null
 
@@ -1640,14 +1623,15 @@ class AnimeONProvider : MainAPI() {
 
         val sequence = episodes.map { it.data }
         episodeSequences[animeId] = sequence
+        sequence.forEachIndexed { idx, d -> episodeDataIndex[d] = animeId to idx }
 
         if (sequence.isNotEmpty()) {
+            val firstData = sequence.first()
             backgroundExecutor.execute {
                 try {
-                    // Використовуємо OkHttp синхронно замість suspend
-                    val firstData = sequence.first()
-                    // resolveEpisodeToCacheSync(firstData) - можна додати якщо потрібно
-                } catch (_: Exception) {}
+                    kotlinx.coroutines.runBlocking { resolveEpisodeToCache(firstData) }
+                } catch (_: Exception) {
+                }
             }
         }
 
@@ -1698,13 +1682,27 @@ class AnimeONProvider : MainAPI() {
 
     private data class ResolvedEpisode(
         val links: List<ExtractorLink>,
-        val subtitles: List<SubtitleFile>
+        val subtitles: List<SubtitleFile>,
+        val resolvedAt: Long = System.currentTimeMillis()
     )
+
     private val episodeResolutionCache = java.util.concurrent.ConcurrentHashMap<String, ResolvedEpisode>()
     private val episodeSequences = java.util.concurrent.ConcurrentHashMap<Int, List<String>>()
+    private val episodeDataIndex = java.util.concurrent.ConcurrentHashMap<String, Pair<Int, Int>>()
+
+    private fun isResolvedExpired(resolved: ResolvedEpisode): Boolean {
+        val now = System.currentTimeMillis() / 1000
+        return resolved.links.any { link ->
+            val exp = Regex("""[?&]expires=(\d+)""").find(link.url)
+                ?.groupValues?.get(1)?.toLongOrNull()
+            exp != null && exp - 30 <= now
+        }
+    }
 
     private suspend fun resolveEpisodeToCache(data: String) {
-        if (episodeResolutionCache.containsKey(data)) return
+        episodeResolutionCache[data]?.let { existing ->
+            if (existing.links.isNotEmpty() && !isResolvedExpired(existing)) return
+        }
 
         val sources: List<EpisodeSource> = try {
             AppUtils.parseJson<List<EpisodeSource>>(data)
@@ -1717,14 +1715,15 @@ class AnimeONProvider : MainAPI() {
         val links = java.util.concurrent.CopyOnWriteArrayList<ExtractorLink>()
         val subtitles = java.util.concurrent.CopyOnWriteArrayList<SubtitleFile>()
 
+        // Локальний дедуп — тільки в межах цього епізоду.
+        // isGlobalDuplicate тут НЕ використовуємо: він глобальний і блокує
+        // легітимні лінки інших епізодів зі співпадаючим базовим URL.
+        val seenLinks = java.util.Collections.synchronizedSet(mutableSetOf<String>())
         val safeCallback: (ExtractorLink) -> Unit = { link ->
-            if (!isGlobalDuplicate(link.name, link.quality, link.url)) {
-                links.add(link)
-            }
+            val key = "${link.name}|${link.quality}|${normalizeLinkUrl(link.url)}"
+            if (seenLinks.add(key)) links.add(link)
         }
         val subtitleCallback: (SubtitleFile) -> Unit = { subtitles.add(it) }
-
-        var foundAny = false
 
         for (source in sources) {
             val sourceName = "${source.translationName} (${source.playerName})"
@@ -1795,8 +1794,6 @@ class AnimeONProvider : MainAPI() {
                             }
 
                             emitFenixSubtitles(ep, subtitleCallback, fenixHeaders2, ::addToken)
-
-                            foundAny = true
                         }
                     }
                     continue
@@ -1805,7 +1802,6 @@ class AnimeONProvider : MainAPI() {
                 if (isAshdi) {
                     if (videoUrl.contains("ashdi.vip")) {
                         processAshdiIframe(videoUrl, sourceName, isMovie = false, safeCallback)
-                        foundAny = true
                     } else if (videoUrl.contains(".m3u8")) {
                         val streams = M3u8Helper.generateM3u8(
                             source = sourceName,
@@ -1818,7 +1814,6 @@ class AnimeONProvider : MainAPI() {
                         } else {
                             streams.forEach { safeCallback(fixMovieExtractorLink(it, sourceName)) }
                         }
-                        foundAny = true
                     }
                 } else {
                     if (videoUrl.contains("moonanime")) {
@@ -1835,13 +1830,11 @@ class AnimeONProvider : MainAPI() {
                             } else {
                                 streams.forEach { safeCallback(fixMovieExtractorLink(it, sourceName)) }
                             }
-                            foundAny = true
                         } else {
                             val (rawFile, subUrl) = getMoonFile(videoUrl)
                             if (rawFile.isNotEmpty()) {
                                 invokeSubtitles(subUrl, subtitleCallback)
                                 processMoonRawFile(rawFile, sourceName, isMovie = false, safeCallback)
-                                foundAny = true
                             }
                         }
                     }
@@ -1849,8 +1842,31 @@ class AnimeONProvider : MainAPI() {
             } catch (e: Exception) {
             }
         }
-        
-        episodeResolutionCache[data] = ResolvedEpisode(links, subtitles)
+
+        // Кешуємо ТІЛЬКИ якщо щось знайшли. putIfAbsent — щоб не перезаписати
+        // успішний кеш (напр., від паралельного виклику) порожнім результатом.
+        if (links.isNotEmpty()) {
+            episodeResolutionCache.putIfAbsent(data, ResolvedEpisode(links, subtitles))
+        }
+    }
+
+    private fun prefetchNext(currentData: String) {
+        val loc = episodeDataIndex[currentData] ?: return
+        val seq = episodeSequences[loc.first] ?: return
+        val nextIdx = loc.second + 1
+        if (nextIdx >= seq.size) return
+
+        val nextData = seq[nextIdx]
+        episodeResolutionCache[nextData]?.let {
+            if (it.links.isNotEmpty() && !isResolvedExpired(it)) return
+        }
+
+        backgroundExecutor.execute {
+            try {
+                kotlinx.coroutines.runBlocking { resolveEpisodeToCache(nextData) }
+            } catch (_: Exception) {
+            }
+        }
     }
 
     override suspend fun loadLinks(
@@ -1871,29 +1887,7 @@ class AnimeONProvider : MainAPI() {
         resolved?.links?.forEach { callback(it) }
         resolved?.subtitles?.forEach { subtitleCallback(it) }
 
-        var currentAnimeId: Int? = null
-        var currentIndex: Int? = null
-        for ((id, seq) in episodeSequences) {
-            val idx = seq.indexOf(data)
-            if (idx != -1) {
-                currentAnimeId = id
-                currentIndex = idx
-                break
-            }
-        }
-
-        if (currentAnimeId != null && currentIndex != null) {
-            val seq = episodeSequences[currentAnimeId]
-            if (seq != null && currentIndex + 1 < seq.size) {
-                val nextData = seq[currentIndex + 1]
-                backgroundExecutor.execute {
-                    try {
-                        // Використовуємо синхронний підхід для prefetch
-                        // Можна додати resolveEpisodeToCacheSync тут
-                    } catch (_: Exception) {}
-                }
-            }
-        }
+        prefetchNext(data)
 
         return resolved?.links?.isNotEmpty() == true
     }
@@ -1908,10 +1902,12 @@ class AnimeONProvider : MainAPI() {
 
         var foundAny = false
 
+        // Локальний дедуп замість isGlobalDuplicate — щоб не блокувати
+        // легітимні лінки при повторному відкритті того ж фільму.
+        val seenLinks = java.util.Collections.synchronizedSet(mutableSetOf<String>())
         val safeCallback: (ExtractorLink) -> Unit = { link ->
-            if (!isGlobalDuplicate(link.name, link.quality, link.url)) {
-                callback(link)
-            }
+            val key = "${link.name}|${link.quality}|${normalizeLinkUrl(link.url)}"
+            if (seenLinks.add(key)) callback(link)
         }
 
         try {
