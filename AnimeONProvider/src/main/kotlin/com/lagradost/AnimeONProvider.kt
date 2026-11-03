@@ -166,8 +166,6 @@ class AnimeONProvider : MainAPI() {
         .readTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
         .build()
 
-    // ===== Кеш резолву + prefetch =====
-
     private val backgroundScope = CoroutineScope(Dispatchers.IO)
 
     private data class ResolvedEpisode(
@@ -193,8 +191,6 @@ class AnimeONProvider : MainAPI() {
                 ?.let { exp -> exp - 30 <= now } ?: false
         }
     }
-
-    // ===== кінець кешу =====
 
     private fun currentSeasonLabel(): String {
         val cal = java.util.Calendar.getInstance()
@@ -1527,7 +1523,6 @@ class AnimeONProvider : MainAPI() {
 
         val franchise = buildFranchise(animeId)
 
-        // ===== Реєстрація послідовності + prefetch першого епізоду =====
         val sequence = episodes.map { it.data }
         episodeSequences[animeId] = sequence
         sequence.forEachIndexed { idx, d -> episodeDataIndex[d] = animeId to idx }
@@ -1541,7 +1536,6 @@ class AnimeONProvider : MainAPI() {
                 }
             }
         }
-        // ===== кінець =====
 
         return if (tvType == TvType.Anime || tvType == TvType.OVA) {
             newAnimeLoadResponse(animeJSON.titleUa, "$mainUrl/anime/$animeId", tvType) {
@@ -1588,8 +1582,6 @@ class AnimeONProvider : MainAPI() {
         }
     }
 
-    // ===== Prefetch helpers =====
-
     private suspend fun resolveEpisodeToCache(data: String) {
         val mutex = episodeResolveMutexes.getOrPut(data) { Mutex() }
         mutex.withLock {
@@ -1633,8 +1625,6 @@ class AnimeONProvider : MainAPI() {
         }
     }
 
-    // ===== loadLinks тепер: кеш + mutex + prefetch =====
-
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -1647,7 +1637,6 @@ class AnimeONProvider : MainAPI() {
             return loadMovieLinks(animeId, subtitleCallback, callback)
         }
 
-        // Швидкий шлях — свіжий кеш
         episodeResolutionCache[data]?.let { cached ->
             if (cached.links.isNotEmpty() && !isResolvedExpired(cached)) {
                 cached.links.forEach { callback(it) }
@@ -1659,7 +1648,6 @@ class AnimeONProvider : MainAPI() {
 
         val mutex = episodeResolveMutexes.getOrPut(data) { Mutex() }
         return mutex.withLock {
-            // Double-check під локом
             episodeResolutionCache[data]?.let { cached ->
                 if (cached.links.isNotEmpty() && !isResolvedExpired(cached)) {
                     cached.links.forEach { callback(it) }
@@ -1695,8 +1683,6 @@ class AnimeONProvider : MainAPI() {
             result
         }
     }
-
-    // ===== безпосередній резолв епізоду (колишнє тіло loadLinks) =====
 
     private suspend fun resolveEpisodeLinks(
         data: String,
