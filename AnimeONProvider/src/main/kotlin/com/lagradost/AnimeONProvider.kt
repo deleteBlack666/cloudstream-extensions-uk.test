@@ -1,7 +1,5 @@
 package com.lagradost
 
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.Dispatchers
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addMalId
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
@@ -9,6 +7,9 @@ import com.lagradost.cloudstream3.utils.AppUtils
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.M3u8Helper
 import com.lagradost.models.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 class AnimeONProvider : MainAPI() {
 
@@ -175,9 +176,7 @@ class AnimeONProvider : MainAPI() {
         .readTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
         .build()
 
-    private val backgroundExecutor = java.util.concurrent.Executors.newCachedThreadPool { r ->
-        Thread(r).apply { isDaemon = true }
-    }
+    private val backgroundScope = CoroutineScope(Dispatchers.IO)
 
     private fun currentSeasonLabel(): String {
         val cal = java.util.Calendar.getInstance()
@@ -1629,9 +1628,9 @@ class AnimeONProvider : MainAPI() {
 
         if (sequence.isNotEmpty()) {
             val firstData = sequence.first()
-            backgroundExecutor.execute {
+            backgroundScope.launch {
                 try {
-                    kotlinx.coroutines.runBlocking { resolveEpisodeToCache(firstData) }
+                    resolveEpisodeToCache(firstData)
                 } catch (_: Exception) {
                 }
             }
@@ -1863,9 +1862,9 @@ class AnimeONProvider : MainAPI() {
             if (it.links.isNotEmpty() && !isResolvedExpired(it)) return
         }
 
-        backgroundExecutor.execute {
+        backgroundScope.launch {
             try {
-                kotlinx.coroutines.runBlocking { resolveEpisodeToCache(nextData) }
+                resolveEpisodeToCache(nextData)
             } catch (_: Exception) {
             }
         }
