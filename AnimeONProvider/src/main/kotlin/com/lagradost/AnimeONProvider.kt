@@ -1,5 +1,7 @@
 package com.lagradost
 
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addMalId
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
