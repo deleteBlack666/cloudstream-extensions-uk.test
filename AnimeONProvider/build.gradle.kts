@@ -3,6 +3,7 @@ version = 3
 
 dependencies {
     implementation(libs.gson)
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
