@@ -1,0 +1,113 @@
+package com.lagradost
+
+import com.lagradost.common.TitleUtils
+import org.jsoup.nodes.Document
+import org.jsoup.nodes.Element
+
+private val singleQuoteFileRegex = Regex("""file\s*:\s*'([^']+)'""")
+private val doubleQuoteFileRegex = Regex("""file\s*:\s*"([^"]+)"""")
+
+private val singleQuoteSubtitleRegex = Regex("""subtitle\s*:\s*'([^']*)'""")
+private val doubleQuoteSubtitleRegex = Regex("""subtitle\s*:\s*"([^"]*)"""")
+
+/**
+ * Витягує вміст поля `file` з коду або скриптів плеєра (наприклад, zetvideo.net).
+ * Шукає окремо для одинарних та подвійних лапок, щоб уникнути передчасного обриву
+ * на внутрішніх лапках JSON-плейлістів (`file:'[{"title":"..."}]'`).
+ */
+internal fun extractUAFlixFile(text: String?): String? {
+    if (text.isNullOrBlank()) return null
+    return singleQuoteFileRegex.find(text)?.groupValues?.get(1)
+        ?: doubleQuoteFileRegex.find(text)?.groupValues?.get(1)
+}
+
+/**
+ * Витягує вміст поля `subtitle` з коду плеєра з підтримкою як одинарних, так і подвійних лапок.
+ */
+internal fun extractUAFlixSubtitleString(text: String?): String? {
+    if (text.isNullOrBlank()) return null
+    return singleQuoteSubtitleRegex.find(text)?.groupValues?.get(1)
+        ?: doubleQuoteSubtitleRegex.find(text)?.groupValues?.get(1)
+}
+
+internal data class UAFlixSubtitle(
+    val language: String,
+    val url: String,
+)
+
+internal fun parseUAFlixSubtitle(raw: String?): UAFlixSubtitle? {
+    val value = raw?.trim().orEmpty()
+    if (!value.startsWith("[")) return null
+
+    val endIndex = value.indexOf(']')
+    if (endIndex <= 1) return null
+
+    val language = value.substring(1, endIndex).trim()
+    val url = value.substring(endIndex + 1).trim().trimEnd(',')
+    if (language.isBlank() || !url.startsWith("http://") &&
+        !url.startsWith("https://") && !url.startsWith("//")
+    ) {
+        return null
+    }
+    return UAFlixSubtitle(language, url)
+}
+
+internal fun isUAFlixComingSoon(document: Document): Boolean {
+    val hasVideoPlayer = document.select(".video-box iframe[src], .video-box iframe[data-src]").any {
+        val src = it.attr("src").ifBlank { it.attr("data-src") }
+        src.isNotBlank() && !src.contains("youtube.com", ignoreCase = true) && !src.contains("youtu.be", ignoreCase = true)
+    }
+    if (hasVideoPlayer) return false
+
+    val hasSharePremiere = document.select(".rate-yx-share").any { element ->
+        val text = element.text()
+        text.contains("Прем'єра", ignoreCase = true) && text.contains("незабаром", ignoreCase = true)
+    }
+    if (hasSharePremiere) return true
+
+    val hasButtonPremiere = document.select("button.btn-warning, button.btn, .btn, .fbtn").any { element ->
+        element.text().contains("Прем'єра", ignoreCase = true)
+    }
+    if (hasButtonPremiere) return true
+
+    return false
+}
+
+/** Чиста назва з h1 сторінки деталей: справжній заголовок з [itemprop=name] без SEO-хвоста "дивитись онлайн [українською]". */
+internal fun extractUAFlixTitle(document: Document): String {
+    val h1 = document.selectFirst(".fright h1") ?: return ""
+    val nameElement = h1.selectFirst("[itemprop=name]") ?: h1
+    return TitleUtils.stripSeo(nameElement.text())
+}
+
+/** Назва картки у списку: вузол `.vi-title` (лише українська назва), інакше alt постера — у пошуку `.vi-title` немає. */
+internal fun extractUAFlixCardTitle(card: Element): String {
+    val title = card.selectFirst(".vi-title")?.text()?.trim()
+    if (!title.isNullOrBlank()) return title
+    return card.selectFirst(".vi-img, .sres-img img")?.attr("alt")?.trim().orEmpty()
+}
+
+/** Витягує трейлер лише з окремої кнопки UAFlix, а не з основного плеєра. */
+internal fun extractUAFlixTrailer(document: Document): String? {
+    val trailerButton = document.select(".to-trailer").firstOrNull { element ->
+        element.attr("data-src").isNotBlank() ||
+            element.select("[data-src], iframe[src], iframe[data-src], a[href]").isNotEmpty()
+    } ?: return null
+
+    val rawUrl = sequence {
+        yield(trailerButton.attr("data-src"))
+        yieldAll(trailerButton.select("[data-src]").map { it.attr("data-src") })
+        yieldAll(trailerButton.select("iframe[src], iframe[data-src]").map {
+            it.attr("src").ifBlank { it.attr("data-src") }
+        })
+        yieldAll(trailerButton.select("a[href]").map { it.attr("href") })
+    }.map { it.trim() }.firstOrNull { it.isNotBlank() }
+
+    return when {
+        rawUrl.isNullOrBlank() -> null
+        rawUrl.startsWith("//") -> "https:$rawUrl"
+        rawUrl.startsWith("http://", ignoreCase = true) ||
+            rawUrl.startsWith("https://", ignoreCase = true) -> rawUrl
+        else -> null
+    }
+}
