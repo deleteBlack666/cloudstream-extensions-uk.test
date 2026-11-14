@@ -274,7 +274,7 @@ class UAFlixProvider : MainAPI() {
     }
 
     // It works when I click to view the series
-    override suspend fun loadLinks(
+        override suspend fun loadLinks(
     data: String, // (Serial) [Season Index, Episode Name, url] | (Film) [Title, Player Url]
     isCasting: Boolean,
     subtitleCallback: (SubtitleFile) -> Unit,
@@ -301,7 +301,8 @@ class UAFlixProvider : MainAPI() {
                 ?: extractUAFlixSubtitleString(playerRes.text)
                 ?: ""
             
-            val currentReferer = if (playerUrl.contains("zetvideo.net")) "https://zetvideo.net/" else "https://tortuga.wtf/"
+            // Якщо це zetvideo, використовуємо повний URL плеєра як Referer
+            val currentReferer = if (playerUrl.contains("zetvideo.net")) playerUrl else "https://tortuga.wtf/"
 
             M3u8Helper.generateM3u8(
                     source = "UAFlix",
@@ -326,7 +327,7 @@ class UAFlixProvider : MainAPI() {
                 val episode = season.folder.firstOrNull() ?: continue
                 if (episode.file.isBlank()) continue
                 // Add as source
-                val currentReferer = if (playerUrl.contains("zetvideo.net")) "https://zetvideo.net/" else "https://tortuga.wtf/"
+                val currentReferer = if (playerUrl.contains("zetvideo.net")) playerUrl else "https://tortuga.wtf/"
 
                 M3u8Helper.generateM3u8(
                         source = dubs.title,
@@ -355,7 +356,7 @@ class UAFlixProvider : MainAPI() {
                 for(episode in season.folder){                     
                     if(episode.title == dataList[1]){
                         // Add as source
-                        val currentReferer = if (dataList[2].contains("zetvideo.net")) "https://zetvideo.net/" else "https://tortuga.wtf/"
+                        val currentReferer = if (dataList[2].contains("zetvideo.net")) dataList[2] else "https://tortuga.wtf/"
 
                         M3u8Helper.generateM3u8(
                                 source = dubs.title,
@@ -375,7 +376,7 @@ class UAFlixProvider : MainAPI() {
     }
 
     return true
-    }
+        }
 
     private fun extractIntsFromString(string: String): List<MatchResult> {
         return Regex("(\\d+)").findAll(string).toList()
