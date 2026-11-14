@@ -275,7 +275,7 @@ class UAFlixProvider : MainAPI() {
 
     // It works when I click to view the series
     override suspend fun loadLinks(
-    data: String,
+    data: String, // (Serial) [Season Index, Episode Name, url] | (Film) [Title, Player Url]
     isCasting: Boolean,
     subtitleCallback: (SubtitleFile) -> Unit,
     callback: (ExtractorLink) -> Unit
@@ -300,11 +300,13 @@ class UAFlixProvider : MainAPI() {
             val subtitleString = extractUAFlixSubtitleString(playerRes.document.select("script").html())
                 ?: extractUAFlixSubtitleString(playerRes.text)
                 ?: ""
+            
+            val currentReferer = if (playerUrl.contains("zetvideo.net")) "https://zetvideo.net/" else "https://tortuga.wtf/"
 
             M3u8Helper.generateM3u8(
                     source = "UAFlix",
                     streamUrl = playerRawJson,
-                    referer = "https://tortuga.wtf/"
+                    referer = currentReferer
             ).let { streams ->
                 if (streams.size > 1) streams.dropLast(1) else streams
             }.forEach(callback)
@@ -319,15 +321,17 @@ class UAFlixProvider : MainAPI() {
         val playerRawJson = extractUAFlixFile(playerRes.document.select("script").html())
             ?: extractUAFlixFile(playerRes.text)
             ?: ""
-        tryParseJson<List<PlayerJson>>(playerRawJson)?.map { dubs ->   
-            for(season in dubs.folder){                                
+        tryParseJson<List<PlayerJson>>(playerRawJson)?.map { dubs ->   // Dubs
+            for(season in dubs.folder){                                // Seasons
                 val episode = season.folder.firstOrNull() ?: continue
                 if (episode.file.isBlank()) continue
-                
+                // Add as source
+                val currentReferer = if (playerUrl.contains("zetvideo.net")) "https://zetvideo.net/" else "https://tortuga.wtf/"
+
                 M3u8Helper.generateM3u8(
                         source = dubs.title,
                         streamUrl = episode.file,
-                        referer = "https://tortuga.wtf/"
+                        referer = currentReferer
                 ).let { streams ->
                     if (streams.size > 1) streams.dropLast(1) else streams
                 }.forEach(callback)
@@ -345,16 +349,18 @@ class UAFlixProvider : MainAPI() {
     val playerRawJson = extractUAFlixFile(playerRes.document.select("script").html())
         ?: extractUAFlixFile(playerRes.text)
         ?: ""
-    tryParseJson<List<PlayerJson>>(playerRawJson)?.map { dubs ->   
-        for(season in dubs.folder){                                
+    tryParseJson<List<PlayerJson>>(playerRawJson)?.map { dubs ->   // Dubs
+        for(season in dubs.folder){                                // Seasons
             if(season.title == dataList[0]){
                 for(episode in season.folder){                     
                     if(episode.title == dataList[1]){
-                        
+                        // Add as source
+                        val currentReferer = if (dataList[2].contains("zetvideo.net")) "https://zetvideo.net/" else "https://tortuga.wtf/"
+
                         M3u8Helper.generateM3u8(
                                 source = dubs.title,
                                 streamUrl = episode.file,
-                                referer = "https://tortuga.wtf/"
+                                referer = currentReferer
                         ).let { streams ->
                             if (streams.size > 1) streams.dropLast(1) else streams
                         }.forEach(callback)
@@ -369,7 +375,7 @@ class UAFlixProvider : MainAPI() {
     }
 
     return true
-}  
+    }
 
     private fun extractIntsFromString(string: String): List<MatchResult> {
         return Regex("(\\d+)").findAll(string).toList()
