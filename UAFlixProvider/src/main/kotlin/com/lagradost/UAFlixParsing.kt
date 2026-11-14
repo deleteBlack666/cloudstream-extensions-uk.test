@@ -1,6 +1,5 @@
 package com.lagradost
 
-import com.lagradost.common.TitleUtils
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 
@@ -73,11 +72,21 @@ internal fun isUAFlixComingSoon(document: Document): Boolean {
     return false
 }
 
+/** Заміна відсутнього TitleUtils.stripSeo для очищення назв від SEO-хвостів. */
+private fun stripSeoTitle(text: String): String {
+    return text
+        .replace(Regex("(?i)дивитись онлайн.*"), "")
+        .replace(Regex("(?i)українською.*"), "")
+        .replace(Regex("(?i)в хорошій якості.*"), "")
+        .replace(Regex("(?i)\\s*\\(\\d{4}\\)"), "") // видаляє рік у дужках, якщо треба
+        .trim()
+}
+
 /** Чиста назва з h1 сторінки деталей: справжній заголовок з [itemprop=name] без SEO-хвоста "дивитись онлайн [українською]". */
 internal fun extractUAFlixTitle(document: Document): String {
     val h1 = document.selectFirst(".fright h1") ?: return ""
     val nameElement = h1.selectFirst("[itemprop=name]") ?: h1
-    return TitleUtils.stripSeo(nameElement.text())
+    return stripSeoTitle(nameElement.text())
 }
 
 /** Назва картки у списку: вузол `.vi-title` (лише українська назва), інакше alt постера — у пошуку `.vi-title` немає. */
