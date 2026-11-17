@@ -3,6 +3,13 @@ package com.lagradost.models
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.utils.ExtractorLink
 
+data class TimedValue<T>(
+    val value: T,
+    val at: Long = System.currentTimeMillis()
+) {
+    fun isFresh(ttlMs: Long): Boolean = System.currentTimeMillis() - at < ttlMs
+}
+
 data class PosterFetchTask(
     val moonIds: List<Int>,
     val otherIds: List<Int>,
@@ -22,10 +29,6 @@ data class SubToAdd(
     val url: String,
     val priority: Int
 )
-
-data class TimedValue<T>(val value: T, val at: Long = System.currentTimeMillis()) {
-    fun isFresh(ttlMs: Long): Boolean = System.currentTimeMillis() - at < ttlMs
-}
 
 data class ResolvedEpisode(
     val links: List<ExtractorLink>,
