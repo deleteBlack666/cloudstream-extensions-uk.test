@@ -129,13 +129,16 @@ class AnimeONProvider : MainAPI() {
     private var posterProxyPort: Int = 0
     private val posterCache = java.util.concurrent.ConcurrentHashMap<String, ByteArray>()
     private var moonCookieHeader: String? = null
+    private var moonCookieChecked = false
     private val fenixPlaylistCache = java.util.concurrent.ConcurrentHashMap<String, FenixPlaylist>()
     private var lastFenixMediaAccess: FenixMediaAccess? = null
 
     private val episodePosterCache = java.util.concurrent.ConcurrentHashMap<String, String>()
 
     private data class PosterFetchTask(
-        val episodeIds: List<Int>,
+        val moonIds: List<Int>,
+        val otherIds: List<Int>,
+        val apiPosters: List<String>,
         val animeId: Int,
         val epNum: Int
     )
@@ -478,7 +481,7 @@ class AnimeONProvider : MainAPI() {
                             if (body == null) {
                                 val task = posterFetchTasks[key]
                                 if (task != null) {
-                                    body = fetchEpisodePosterBytes(task.episodeIds)
+                                    body = fetchEpisodePosterBytes(task)
                                     if (body != null && body.isNotEmpty()) {
                                         posterCache[key] = body
                                         episodePosterCache["${task.animeId}:${task.epNum}"] =
@@ -530,6 +533,8 @@ class AnimeONProvider : MainAPI() {
 
     private fun getMoonCookieHeader(): String? {
         moonCookieHeader?.let { return it }
+        if (moonCookieChecked) return null
+        moonCookieChecked = true
 
         for (base in moonBaseDomains) {
             try {
@@ -537,6 +542,7 @@ class AnimeONProvider : MainAPI() {
                     .url("$base/")
                     .header("User-Agent", userAgent)
                     .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+                    .header("Accept-Language", "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7")
                     .get()
                     .build()
 
@@ -563,6 +569,8 @@ class AnimeONProvider : MainAPI() {
     }
 
     private fun fetchPosterBytes(originalUrl: String): ByteArray {
+        if (originalUrl.isBlank() || originalUrl.contains("mooncdn.")) return ByteArray(0)
+
         return try {
             val requestBuilder = okhttp3.Request.Builder()
                 .url(originalUrl)
@@ -794,60 +802,99 @@ class AnimeONProvider : MainAPI() {
     }
 
     private fun getMoonRawPosterUrl(iframeUrl: String): String? {
-    if (!iframeUrl.contains("moonanime")) return null
+        if (!iframeUrl.contains("moonanime")) {
+            return null
+        }
 
-    val cleanUrl = if (iframeUrl.contains("player=")) iframeUrl
-        else "$iframeUrl${if (iframeUrl.contains("?")) "&" else "?"}player=animeon.club"
+        val cleanUrl = if (iframeUrl.contains("player=")) {
+            iframeUrl
+        } else {
+            "$iframeUrl${if (iframeUrl.contains("?")) "&" else "?"}player=animeon.club"
+        }
 
-    val html = httpGetText(cleanUrl, mapOf(
-        "User-Agent" to userAgent,
-        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-        "Accept-Language" to "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7", // обов'язково, інакше 400
-        "Referer" to "$mainUrl/",
-        "X-Requested-With" to "mark.via.gp",
-        "Sec-Fetch-Site" to "none",
-        "Sec-Fetch-Mode" to "navigate",
-        "Sec-Fetch-Dest" to "document",
-        "Upgrade-Insecure-Requests" to "1"
-    )) ?: return null
+        val html = httpGetText(
+            cleanUrl,
+            mapOf(
+                "User-Agent" to userAgent,
+                "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+                "Accept-Language" to "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
+                "Referer" to "$mainUrl/",
+                "X-Requested-With" to "mark.via.gp",
+                "Sec-Fetch-Site" to "none",
+                "Sec-Fetch-Mode" to "navigate",
+                "Sec-Fetch-Dest" to "document",
+                "Upgrade-Insecure-Requests" to "1"
+            )
+        ) ?: return null
 
-    fun ok(u: String?) = !u.isNullOrEmpty() && u.startsWith("http") && !u.contains("mooncdn.")
+        if (html.isEmpty()) {
+            return null
+        }
 
-    for (match in Regex("""atob\s*\(\s*["']([^"']+)["']\s*\)""").findAll(html)) {
-        val decoded = moonOuterDecode(match.groupValues[1])
-        if (decoded.isEmpty()) continue
+        val atobRegex = Regex("""atob\s*\(\s*["']([^"']+)["']\s*\)""")
+        val keyRegex = Regex("""var\s+k\s*=\s*["']([^"']+)["']""")
+        val rawPosterEncRegex = Regex("""rawPoster\s*=\s*\w+\s*\(\s*["']([A-Za-z0-9+/=]+)["']\s*\)""")
+        val rawPosterPlainRegex = Regex("""rawPoster\s*=\s*["'](https?://[^"']+)["']""")
+        val posterPropRegex = Regex("""poster["']?\s*[:=]\s*["'](https?://[^"']+)["']""")
+        val callRegex = Regex("""(\w+)\s*\(\s*["']([A-Za-z0-9+/=]+)["']\s*\)""")
+        val imageExtRegex = Regex("""\.(webp|jpe?g|png|avif)(\?|$)""", RegexOption.IGNORE_CASE)
 
-        val xorKey = Regex("""var\s+k\s*=\s*["']([^"']+)["']""")
-            .find(decoded)?.groupValues?.get(1)
+        fun isUsablePoster(url: String?): Boolean {
+            return !url.isNullOrEmpty() && url.startsWith("http") && !url.contains("mooncdn.")
+        }
 
-        if (xorKey != null) {
-            val enc = Regex("""rawPoster\s*=\s*\w+\s*\(\s*["']([A-Za-z0-9+/=]+)["']\s*\)""")
-                .find(decoded)?.groupValues?.get(1)
-            if (enc != null) {
-                val u = moonDecrypt(enc, xorKey).trim()
-                if (ok(u)) return u
+        for (match in atobRegex.findAll(html)) {
+            val decoded = moonOuterDecode(match.groupValues[1])
+            if (decoded.isEmpty()) continue
+
+            val xorKey = keyRegex.find(decoded)?.groupValues?.get(1)
+
+            if (!xorKey.isNullOrEmpty()) {
+                val encodedPoster = rawPosterEncRegex.find(decoded)?.groupValues?.get(1)
+                if (!encodedPoster.isNullOrEmpty()) {
+                    val decrypted = moonDecrypt(encodedPoster, xorKey).trim()
+                    if (isUsablePoster(decrypted)) {
+                        return decrypted
+                    }
+                }
+            }
+
+            val plainPoster = rawPosterPlainRegex.find(decoded)?.groupValues?.get(1)
+            if (isUsablePoster(plainPoster)) {
+                return plainPoster
+            }
+
+            val propPoster = posterPropRegex.find(decoded)?.groupValues?.get(1)
+            if (isUsablePoster(propPoster)) {
+                return propPoster
+            }
+
+            if (!xorKey.isNullOrEmpty()) {
+                for (callMatch in callRegex.findAll(decoded)) {
+                    val result = moonDecrypt(callMatch.groupValues[2], xorKey).trim()
+                    if (isUsablePoster(result) && imageExtRegex.containsMatchIn(result)) {
+                        return result
+                    }
+                }
             }
         }
 
-        Regex("""rawPoster\s*=\s*["'](https?://[^"']+)["']""")
-            .find(decoded)?.groupValues?.get(1)?.let { if (ok(it)) return it }
+        val patterns = listOf(
+            Regex("""((?:https?:)?//[^"'\s\\]+/poster\.(?:webp|jpg|jpeg|png)(?:\?[^"'\s\\]*)?)"""),
+            Regex("""poster["']?\s*:\s*["']([^"']+)["']""")
+        )
 
-        Regex("""poster["']?\s*[:=]\s*["'](https?://[^"']+)["']""")
-            .find(decoded)?.groupValues?.get(1)?.let { if (ok(it)) return it }
-
-        if (xorKey != null) {
-            Regex("""\w+\s*\(\s*["']([A-Za-z0-9+/=]+)["']\s*\)""").findAll(decoded).forEach { c ->
-                val u = moonDecrypt(c.groupValues[1], xorKey).trim()
-                if (ok(u) && Regex("""\.(webp|jpe?g|png)(\?|$)""").containsMatchIn(u)) return u
+        for (pattern in patterns) {
+            val match = pattern.find(html) ?: continue
+            val extracted = match.groupValues[1]
+            val finalUrl = if (extracted.startsWith("//")) "https:$extracted" else extracted
+            if (isUsablePoster(finalUrl)) {
+                return finalUrl
             }
         }
-    }
-    return null
-    }
 
-    return posterUrl
+        return null
     }
-
 
     private fun fenixExtractCode(embedUrl: String): String? {
         return embedUrl.substringAfter("/embed/", "").substringBefore("?").ifBlank { null }
@@ -959,7 +1006,8 @@ class AnimeONProvider : MainAPI() {
             mapOf(
                 "User-Agent" to userAgent,
                 "Referer" to "$mainUrl/",
-                "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+                "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language" to "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7"
             )
         ) ?: ""
 
@@ -1072,12 +1120,32 @@ class AnimeONProvider : MainAPI() {
         }
     }
 
-    private fun fetchEpisodePosterBytes(episodeIds: List<Int>): ByteArray? {
-        if (episodeIds.isEmpty()) return null
+    private fun isImageBytes(bytes: ByteArray?): Boolean {
+        if (bytes == null || bytes.size < 12) return false
 
-        for (episodeId in episodeIds) {
+        fun b(i: Int): Int = bytes[i].toInt() and 0xFF
+
+        return (b(0) == 0x89 && b(1) == 0x50) ||
+            (b(0) == 0xFF && b(1) == 0xD8) ||
+            (b(0) == 0x52 && b(1) == 0x49 && b(8) == 0x57 && b(9) == 0x45) ||
+            (b(4) == 0x66 && b(5) == 0x74 && b(6) == 0x79 && b(7) == 0x70) ||
+            (b(0) == 0x47 && b(1) == 0x49 && b(2) == 0x46)
+    }
+
+    private fun fetchEpisodePosterBytes(task: PosterFetchTask): ByteArray? {
+        for (episodeId in task.moonIds) {
             val bytes = fetchSingleEpisodePosterBytes(episodeId)
-            if (bytes != null && bytes.isNotEmpty()) return bytes
+            if (isImageBytes(bytes)) return bytes
+        }
+
+        for (posterUrl in task.apiPosters) {
+            val bytes = fetchPosterBytes(posterUrl)
+            if (isImageBytes(bytes)) return bytes
+        }
+
+        for (episodeId in task.otherIds) {
+            val bytes = fetchSingleEpisodePosterBytes(episodeId)
+            if (isImageBytes(bytes)) return bytes
         }
 
         return null
@@ -1100,21 +1168,33 @@ class AnimeONProvider : MainAPI() {
             val thumb = details?.episode?.thumbnail_url
 
             if (!thumb.isNullOrBlank()) {
-                val bytes = fetchPosterBytes(thumb)
-                if (bytes.isNotEmpty()) return bytes
+                val mediaToken = lastFenixMediaAccess?.token ?: details?.token
+                val tokenUrl = if (mediaToken.isNullOrEmpty() || thumb.contains("token=")) {
+                    thumb
+                } else {
+                    thumb + (if (thumb.contains("?")) "&" else "?") + "token=$mediaToken"
+                }
+
+                val bytes = fetchPosterBytes(tokenUrl)
+                if (isImageBytes(bytes)) return bytes
+
+                if (tokenUrl != thumb) {
+                    val plainBytes = fetchPosterBytes(thumb)
+                    if (isImageBytes(plainBytes)) return plainBytes
+                }
             }
 
             return null
         }
 
         val rawPosterUrl = when {
-            videoUrl.contains("ashdi.vip") -> getAshdiRawPosterUrl(videoUrl)
             videoUrl.contains("moonanime") -> getMoonRawPosterUrl(videoUrl)
+            videoUrl.contains("ashdi.vip") -> getAshdiRawPosterUrl(videoUrl)
             else -> null
         } ?: return null
 
         val bytes = fetchPosterBytes(rawPosterUrl)
-        if (bytes.isEmpty()) return null
+        if (!isImageBytes(bytes)) return null
 
         return bytes
     }
@@ -1429,47 +1509,50 @@ class AnimeONProvider : MainAPI() {
                 episodeSources.keys.sorted().forEach { epNum ->
                     val sources = episodeSources[epNum] ?: return@forEach
 
-                    var epPoster: String? = sources.firstNotNullOfOrNull { s ->
+                    val moonIds = sources.filter { it.playerName.contains("Moon", true) }
+                        .map { it.episodeId }.distinct()
+
+                    val otherIds = sources.filterNot { it.playerName.contains("Moon", true) }
+                        .sortedWith(
+                            compareBy<EpisodeSource> {
+                                when {
+                                    it.playerName.contains("Ashdi", true) -> 0
+                                    it.playerName.contains("Fenix", true) -> 1
+                                    else -> 2
+                                }
+                            }
+                        )
+                        .map { it.episodeId }.distinct()
+
+                    val apiPosters = sources.mapNotNull { s ->
                         s.apiPoster?.takeIf { it.isNotEmpty() && !it.contains("mooncdn.") }
+                    }.distinct()
+
+                    var epPoster: String? = episodePosterCache["$animeId:$epNum"]?.takeIf {
+                        posterCache.containsKey(it.substringAfterLast("?"))
                     }
 
-                    if (epPoster == null) {
-                        val cachedPoster = episodePosterCache["$animeId:$epNum"]
-                        if (cachedPoster != null && !cachedPoster.contains("mooncdn.")) {
-                            epPoster = cachedPoster
-                        } else {
-                            val orderedSources = sources.sortedWith(
-                                compareBy<EpisodeSource> {
-                                    when {
-                                        it.playerName.contains("Ashdi", true) -> 0
-                                        it.playerName.contains("Moon", true) -> 1
-                                        else -> 2
-                                    }
-                                }
-                            )
+                    if (epPoster == null &&
+                        (moonIds.isNotEmpty() || otherIds.isNotEmpty() || apiPosters.isNotEmpty())
+                    ) {
+                        val key = java.util.UUID.randomUUID().toString().replace("-", "")
+                        val task = PosterFetchTask(moonIds, otherIds, apiPosters, animeId, epNum)
 
-                            val orderedEpisodeIds = orderedSources.map { it.episodeId }.distinct()
-                            val episodeId = orderedEpisodeIds.firstOrNull()
+                        posterFetchTasks[key] = task
+                        epPoster = "http://127.0.0.1:$posterProxyPort/poster?$key"
 
-                            if (episodeId != null) {
-                                val key = java.util.UUID.randomUUID().toString().replace("-", "")
-                                posterFetchTasks[key] = PosterFetchTask(orderedEpisodeIds, animeId, epNum)
-                                epPoster = "http://127.0.0.1:$posterProxyPort/poster?$key"
+                        val prefetchKey = key
+                        val prefetchTask = task
+                        val prefetchAnimeId = animeId
+                        val prefetchEpNum = epNum
 
-                                val prefetchKey = key
-                                val prefetchEpisodeIds = orderedEpisodeIds
-                                val prefetchAnimeId = animeId
-                                val prefetchEpNum = epNum
-
-                                posterPrefetchExecutor.submit {
-                                    if (!posterCache.containsKey(prefetchKey)) {
-                                        val bytes = fetchEpisodePosterBytes(prefetchEpisodeIds)
-                                        if (bytes != null && bytes.isNotEmpty()) {
-                                            posterCache[prefetchKey] = bytes
-                                            episodePosterCache["$prefetchAnimeId:$prefetchEpNum"] =
-                                                "http://127.0.0.1:$posterProxyPort/poster?$prefetchKey"
-                                        }
-                                    }
+                        posterPrefetchExecutor.submit {
+                            if (!posterCache.containsKey(prefetchKey)) {
+                                val bytes = fetchEpisodePosterBytes(prefetchTask)
+                                if (bytes != null && bytes.isNotEmpty()) {
+                                    posterCache[prefetchKey] = bytes
+                                    episodePosterCache["$prefetchAnimeId:$prefetchEpNum"] =
+                                        "http://127.0.0.1:$posterProxyPort/poster?$prefetchKey"
                                 }
                             }
                         }
