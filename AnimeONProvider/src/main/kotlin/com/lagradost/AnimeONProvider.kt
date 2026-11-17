@@ -794,85 +794,91 @@ class AnimeONProvider : MainAPI() {
     }
 
     private fun getMoonRawPosterUrl(iframeUrl: String): String? {
-        if (!iframeUrl.contains("/iframe/")) {
-            return null
-        }
+    private fun getMoonRawPosterUrl(iframeUrl: String): String? {
+    if (!iframeUrl.contains("/iframe/")) {
+        return null
+    }
 
-        val cleanUrl = if (iframeUrl.contains("player=")) {
-            iframeUrl
-        } else {
-            "$iframeUrl${if (iframeUrl.contains("?")) "&" else "?"}player=animeon.club"
-        }
+    val cleanUrl = if (iframeUrl.contains("player=")) {
+        iframeUrl
+    } else {
+        "$iframeUrl${if (iframeUrl.contains("?")) "&" else "?"}player=animeon.club"
+    }
 
-        val html = httpGetText(
-            cleanUrl,
-            mapOf(
-                "User-Agent" to userAgent,
-                "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "Accept-Language" to "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
-                "Referer" to "https://animeon.club/",
-                "X-Requested-With" to "mark.via.gp",
-                "Sec-Fetch-Site" to "none",
-                "Sec-Fetch-Mode" to "navigate",
-                "Sec-Fetch-Dest" to "document",
-                "Upgrade-Insecure-Requests" to "1"
-            )
-        ) ?: return null
+    val html = httpGetText(
+        cleanUrl,
+        mapOf(
+            "User-Agent" to userAgent,
+            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language" to "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Referer" to "https://animeon.club/",
+            "X-Requested-With" to "mark.via.gp",
+            "Sec-Fetch-Site" to "none",
+            "Sec-Fetch-Mode" to "navigate",
+            "Sec-Fetch-Dest" to "document",
+            "Upgrade-Insecure-Requests" to "1"
+        )
+    ) ?: return null
 
-        val atobRegex = Regex("""atob\s*\(\s*["']([^"']+)["']\s*\)""")
-        var posterUrl: String? = null
+    extractMoonPosterFromText(html)?.let { return it }
 
-        for (match in atobRegex.findAll(html)) {
-            val decoded = moonOuterDecode(match.groupValues[1])
-            if (!decoded.contains("poster") && !decoded.contains("k=")) continue
+    val atobRegex = Regex("""atob\s*\(\s*["']([^"']+)["']\s*\)""")
 
-            posterUrl = Regex("""poster\s*:\s*["'](https?://[^"']+)["']""")
+    for (match in atobRegex.findAll(html)) {
+        val decoded = moonOuterDecode(match.groupValues[1])
+        if (decoded.isEmpty()) continue
+
+        extractMoonPosterFromText(decoded)?.let { return it }
+
+        val xorKey = Regex("""var\s+k\s*=\s*["']([^"']+)["']""")
+            .find(decoded)?.groupValues?.get(1)
+            ?: Regex("""k\s*=\s*["']([^"']+)["']""")
                 .find(decoded)?.groupValues?.get(1)
 
-            if (posterUrl != null) break
+        if (xorKey.isNullOrEmpty()) continue
 
-            val xorKey = Regex("""var\s+k\s*=\s*["']([^"']+)["']""")
-                .find(decoded)?.groupValues?.get(1) ?: continue
+        val callRegex = Regex("""(\w+)\s*\(\s*["']([A-Za-z0-9+/=]+)["']\s*\)""")
 
-            val callRegex = Regex("""(\w+)\s*\(\s*["']([A-Za-z0-9+/=]+)["']\s*\)""")
-            var foundInCalls = false
+        for (callMatch in callRegex.findAll(decoded)) {
+            val result = moonDecrypt(callMatch.groupValues[2], xorKey)
+            if (result.isEmpty()) continue
 
-            for (callMatch in callRegex.findAll(decoded)) {
-                val result = moonDecrypt(callMatch.groupValues[2], xorKey)
-                if (result.startsWith("http") && (result.contains("poster") || result.contains(".webp") || result.contains(".jpg") || result.contains(".png"))) {
-                    posterUrl = result
-                    foundInCalls = true
-                    break
-                }
-            }
+            extractMoonPosterFromText(result)?.let { return it }
+        }
+    }
 
-            if (foundInCalls) break
+    return null
+}
+
+private fun extractMoonPosterFromText(text: String): String? {
+    val patterns = listOf(
+        Regex("""(https?://[^\s"'\\]+/poster\.(?:webp|jpg|jpeg|png)(?:\?[^\s"'\\]*)?)"""),
+        Regex("""(/content/[^\s"'\\]+/poster\.(?:webp|jpg|jpeg|png)(?:\?[^\s"'\\]*)?)"""),
+        Regex("""(//[^\s"'\\]+/poster\.(?:webp|jpg|jpeg|png)(?:\?[^\s"'\\]*)?)"""),
+        Regex("""poster["']?\s*:\s*["']([^"']*poster\.(?:webp|jpg|jpeg|png)[^"']*)["']"""),
+        Regex("""((?:https?:)?//[^\s"'\s]+screen\.jpg)"""),
+        Regex("""((?:https?:)?//[^\s"'\s]+\.ashdi\.vip[^\s"'\s]*(?:screen|poster)[^\s"'\s]*)""")
+    )
+
+    for (pattern in patterns) {
+        val match = pattern.find(text) ?: continue
+
+        val extracted = match.groupValues[1]
+
+        val finalUrl = when {
+            extracted.startsWith("//") -> "https:$extracted"
+            extracted.startsWith("/") -> "https://s.moonanime.net$extracted"
+            extracted.startsWith("http") -> extracted
+            else -> continue
         }
 
-        if (posterUrl.isNullOrEmpty() || posterUrl.contains("mooncdn.")) {
-            val patterns = listOf(
-                Regex("""((?:https?:)?//[^"'\s\\]+/poster\.(?:webp|jpg|jpeg|png)(?:\?[^"'\s\\]*)?)"""),
-                Regex("""poster["']?\s*:\s*["']([^"']+)["']"""),
-                Regex("""((?:https?:)?//[^"'\s]+screen\.jpg)"""),
-                Regex("""((?:https?:)?//[^"'\s]+\.ashdi\.vip[^"'\s]*(?:screen|poster)[^"'\s]*)""")
-            )
-
-            for (pattern in patterns) {
-                val match = pattern.find(html)
-                if (match != null) {
-                    val extracted = match.groupValues[1]
-                    val finalUrl = if (extracted.startsWith("//")) "https:$extracted" else extracted
-                    if (finalUrl.isNotBlank() && !finalUrl.contains("mooncdn.")) {
-                        posterUrl = finalUrl
-                        break
-                    }
-                }
-            }
+        if (finalUrl.isNotBlank() && !finalUrl.contains("mooncdn.")) {
+            return finalUrl
         }
+    }
 
-        if (posterUrl.isNullOrEmpty() || posterUrl.contains("mooncdn.")) {
-            return null
-        }
+    return null
+}
 
         return posterUrl
     }
