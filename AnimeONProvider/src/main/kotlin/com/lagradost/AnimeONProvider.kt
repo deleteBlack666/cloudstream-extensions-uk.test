@@ -794,94 +794,60 @@ class AnimeONProvider : MainAPI() {
     }
 
     private fun getMoonRawPosterUrl(iframeUrl: String): String? {
-    private fun getMoonRawPosterUrl(iframeUrl: String): String? {
-    if (!iframeUrl.contains("/iframe/")) {
-        return null
-    }
+    if (!iframeUrl.contains("moonanime")) return null
 
-    val cleanUrl = if (iframeUrl.contains("player=")) {
-        iframeUrl
-    } else {
-        "$iframeUrl${if (iframeUrl.contains("?")) "&" else "?"}player=animeon.club"
-    }
+    val cleanUrl = if (iframeUrl.contains("player=")) iframeUrl
+        else "$iframeUrl${if (iframeUrl.contains("?")) "&" else "?"}player=animeon.club"
 
-    val html = httpGetText(
-        cleanUrl,
-        mapOf(
-            "User-Agent" to userAgent,
-            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language" to "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
-            "Referer" to "https://animeon.club/",
-            "X-Requested-With" to "mark.via.gp",
-            "Sec-Fetch-Site" to "none",
-            "Sec-Fetch-Mode" to "navigate",
-            "Sec-Fetch-Dest" to "document",
-            "Upgrade-Insecure-Requests" to "1"
-        )
-    ) ?: return null
+    val html = httpGetText(cleanUrl, mapOf(
+        "User-Agent" to userAgent,
+        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "Accept-Language" to "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7", // обов'язково, інакше 400
+        "Referer" to "$mainUrl/",
+        "X-Requested-With" to "mark.via.gp",
+        "Sec-Fetch-Site" to "none",
+        "Sec-Fetch-Mode" to "navigate",
+        "Sec-Fetch-Dest" to "document",
+        "Upgrade-Insecure-Requests" to "1"
+    )) ?: return null
 
-    extractMoonPosterFromText(html)?.let { return it }
+    fun ok(u: String?) = !u.isNullOrEmpty() && u.startsWith("http") && !u.contains("mooncdn.")
 
-    val atobRegex = Regex("""atob\s*\(\s*["']([^"']+)["']\s*\)""")
-
-    for (match in atobRegex.findAll(html)) {
+    for (match in Regex("""atob\s*\(\s*["']([^"']+)["']\s*\)""").findAll(html)) {
         val decoded = moonOuterDecode(match.groupValues[1])
         if (decoded.isEmpty()) continue
 
-        extractMoonPosterFromText(decoded)?.let { return it }
-
         val xorKey = Regex("""var\s+k\s*=\s*["']([^"']+)["']""")
             .find(decoded)?.groupValues?.get(1)
-            ?: Regex("""k\s*=\s*["']([^"']+)["']""")
+
+        if (xorKey != null) {
+            val enc = Regex("""rawPoster\s*=\s*\w+\s*\(\s*["']([A-Za-z0-9+/=]+)["']\s*\)""")
                 .find(decoded)?.groupValues?.get(1)
+            if (enc != null) {
+                val u = moonDecrypt(enc, xorKey).trim()
+                if (ok(u)) return u
+            }
+        }
 
-        if (xorKey.isNullOrEmpty()) continue
+        Regex("""rawPoster\s*=\s*["'](https?://[^"']+)["']""")
+            .find(decoded)?.groupValues?.get(1)?.let { if (ok(it)) return it }
 
-        val callRegex = Regex("""(\w+)\s*\(\s*["']([A-Za-z0-9+/=]+)["']\s*\)""")
+        Regex("""poster["']?\s*[:=]\s*["'](https?://[^"']+)["']""")
+            .find(decoded)?.groupValues?.get(1)?.let { if (ok(it)) return it }
 
-        for (callMatch in callRegex.findAll(decoded)) {
-            val result = moonDecrypt(callMatch.groupValues[2], xorKey)
-            if (result.isEmpty()) continue
-
-            extractMoonPosterFromText(result)?.let { return it }
+        if (xorKey != null) {
+            Regex("""\w+\s*\(\s*["']([A-Za-z0-9+/=]+)["']\s*\)""").findAll(decoded).forEach { c ->
+                val u = moonDecrypt(c.groupValues[1], xorKey).trim()
+                if (ok(u) && Regex("""\.(webp|jpe?g|png)(\?|$)""").containsMatchIn(u)) return u
+            }
         }
     }
-
     return null
-}
-
-private fun extractMoonPosterFromText(text: String): String? {
-    val patterns = listOf(
-        Regex("""(https?://[^\s"'\\]+/poster\.(?:webp|jpg|jpeg|png)(?:\?[^\s"'\\]*)?)"""),
-        Regex("""(/content/[^\s"'\\]+/poster\.(?:webp|jpg|jpeg|png)(?:\?[^\s"'\\]*)?)"""),
-        Regex("""(//[^\s"'\\]+/poster\.(?:webp|jpg|jpeg|png)(?:\?[^\s"'\\]*)?)"""),
-        Regex("""poster["']?\s*:\s*["']([^"']*poster\.(?:webp|jpg|jpeg|png)[^"']*)["']"""),
-        Regex("""((?:https?:)?//[^\s"'\s]+screen\.jpg)"""),
-        Regex("""((?:https?:)?//[^\s"'\s]+\.ashdi\.vip[^\s"'\s]*(?:screen|poster)[^\s"'\s]*)""")
-    )
-
-    for (pattern in patterns) {
-        val match = pattern.find(text) ?: continue
-
-        val extracted = match.groupValues[1]
-
-        val finalUrl = when {
-            extracted.startsWith("//") -> "https:$extracted"
-            extracted.startsWith("/") -> "https://s.moonanime.net$extracted"
-            extracted.startsWith("http") -> extracted
-            else -> continue
-        }
-
-        if (finalUrl.isNotBlank() && !finalUrl.contains("mooncdn.")) {
-            return finalUrl
-        }
     }
 
-    return null
-}
-
-        return posterUrl
+    return posterUrl
     }
+
 
     private fun fenixExtractCode(embedUrl: String): String? {
         return embedUrl.substringAfter("/embed/", "").substringBefore("?").ifBlank { null }
