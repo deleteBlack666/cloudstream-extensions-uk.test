@@ -44,7 +44,10 @@ data class ResolvedEpisode(
         }
     }
 
-    fun isUsable(): Boolean = links.isNotEmpty() && !isExpired()
+    fun isUsable(maxAgeMs: Long = Long.MAX_VALUE): Boolean {
+        return links.isNotEmpty() && !isExpired() &&
+            System.currentTimeMillis() - resolvedAt < maxAgeMs
+    }
 
     companion object {
         private val expiresRegex = Regex("""[?&]expires=(\d+)""")
