@@ -67,5 +67,6 @@ data class FenixPlaybackEpisodeResponse(
 
 data class FenixPlaylist(
     val slug: String? = null,
+    val poster_url: String? = null,
     val playback: FenixPlayback? = null,
 )
