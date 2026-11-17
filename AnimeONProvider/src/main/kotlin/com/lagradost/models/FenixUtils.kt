@@ -13,7 +13,25 @@ object FenixUtils {
     private val mediaAccessRegex = Regex("""window\.FENIX_MEDIA_ACCESS\s*=\s*(\{.*?\});""", RegexOption.DOT_MATCHES_ALL)
     private val playlistRegex = Regex("""window\.FENIX_PLAYLIST\s*=\s*(\{.*?\});""", RegexOption.DOT_MATCHES_ALL)
     private val apiBaseRegex = Regex("""window\.FENIX_API_BASE\s*=\s*["']([^"']+)["']""")
+    private val embedSiteRegex = Regex("""window\.FENIX_EMBED_SITE\s*=\s*["']([^"']+)["']""")
 
+    fun embedSite(html: String): String? {
+        return embedSiteRegex.find(html)?.groupValues?.get(1)
+    }
+
+    fun playbackHeaders(userAgent: String, playbackToken: String, siteToken: String?): Map<String, String> {
+        val headers = mutableMapOf(
+            "User-Agent" to userAgent,
+            "X-Fenix-Playback" to playbackToken,
+            "Accept" to "application/json, text/plain, */*",
+            "Referer" to referer
+        )
+        if (!siteToken.isNullOrEmpty()) {
+            headers["X-Fenix-Site"] = siteToken
+        }
+        return headers
+    }
+    
     fun code(embedUrl: String): String? {
         return embedUrl.substringAfter("/embed/", "").substringBefore("?").ifBlank { null }
     }
