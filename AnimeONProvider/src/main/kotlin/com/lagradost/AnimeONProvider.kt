@@ -55,9 +55,15 @@ class AnimeONProvider : MainAPI() {
     private var moonCookies: Map<String, String>? = null
     private val moonCookieMutex = Mutex()
 
-    private val fenixPlaylistCache = java.util.concurrent.ConcurrentHashMap<String, FenixPlaylist>()
+    private val fenixPlaylistCache = java.util.concurrent.ConcurrentHashMap<String, TimedValue<FenixPlaylist>>()
     private val fenixMediaAccessCache = java.util.concurrent.ConcurrentHashMap<String, FenixMediaAccess>()
+    private val fenixSiteTokens = java.util.concurrent.ConcurrentHashMap<String, String>()
+    private val fenixPosterUrls = java.util.concurrent.ConcurrentHashMap<String, String>()
+    private val fenixPosterBytes = java.util.concurrent.ConcurrentHashMap<String, ByteArray>()
     private var lastFenixMediaAccess: FenixMediaAccess? = null
+
+    private val fenixEmbedSiteRegex = Regex("""window\.FENIX_EMBED_SITE\s*=\s*["']([^"']+)["']""")
+    private val fenixPosterRegex = Regex(""""poster_url"\s*:\s*["']([^"']+)["']""")
 
     private val htmlHttpClient = okhttp3.OkHttpClient.Builder()
         .connectTimeout(8, java.util.concurrent.TimeUnit.SECONDS)
@@ -527,6 +533,35 @@ class AnimeONProvider : MainAPI() {
         return code?.let { fenixMediaAccessCache[it]?.token } ?: fallback ?: lastFenixMediaAccess?.token
     }
 
+    private fun fenixSiteToken(videoUrl: String): String? {
+        return FenixUtils.code(videoUrl)?.let { fenixSiteTokens[it] }
+    }
+
+    private fun rememberFenixEmbed(code: String, text: String) {
+        if (text.isEmpty()) return
+
+        fenixEmbedSiteRegex.find(text)?.groupValues?.get(1)?.let { token ->
+            if (token.isNotBlank()) fenixSiteTokens[code] = token
+        }
+
+        fenixPosterRegex.find(text)?.groupValues?.get(1)?.let { poster ->
+            if (poster.startsWith("http")) fenixPosterUrls[code] = poster
+        }
+    }
+
+    private fun fenixPlaybackHeaders(playbackToken: String, siteToken: String?): Map<String, String> {
+        val headers = mutableMapOf(
+            "User-Agent" to userAgent,
+            "X-Fenix-Playback" to playbackToken,
+            "Accept" to "application/json, text/plain, */*",
+            "Referer" to FenixUtils.referer
+        )
+        if (!siteToken.isNullOrEmpty()) {
+            headers["X-Fenix-Site"] = siteToken
+        }
+        return headers
+    }
+
     private fun fetchEpisodePosterBytes(task: PosterFetchTask): ByteArray? {
         for (episodeId in task.moonIds) {
             val bytes = fetchSingleEpisodePosterBytes(episodeId)
@@ -550,16 +585,36 @@ class AnimeONProvider : MainAPI() {
         val videoUrl = fetchEpisodeVideoUrlSync(episodeId) ?: return null
 
         if (videoUrl.contains("fenixplay.xyz")) {
-            val playlist = getFenixPlaylistSync(videoUrl)
+            val playlist = getFenixPlaylistSync(videoUrl) ?: return null
+            val code = FenixUtils.code(videoUrl)
 
-            val slug = playlist?.slug
-            val playbackToken = playlist?.playback?.token
+            val publicPoster = code?.let { fenixPosterUrls[it] }
+            if (!publicPoster.isNullOrBlank()) {
+                fenixPosterBytes[publicPoster]?.let { cached ->
+                    if (ProviderUtils.isImageBytes(cached)) return cached
+                }
+
+                val bytes = fetchPosterBytes(publicPoster)
+                if (ProviderUtils.isImageBytes(bytes)) {
+                    fenixPosterBytes[publicPoster] = bytes
+                    return bytes
+                }
+            }
+
+            val slug = playlist.slug
+            val playbackToken = playlist.playback?.token
             val epNum = FenixUtils.episodeNumber(videoUrl) ?: 1
             val edition = FenixUtils.edition(videoUrl)
 
             if (slug.isNullOrEmpty() || playbackToken.isNullOrEmpty()) return null
 
-            val details = fetchFenixEpisodePlaybackSync(slug, playbackToken, edition, epNum)
+            val details = fetchFenixEpisodePlaybackSync(
+                slug,
+                playbackToken,
+                edition,
+                epNum,
+                fenixSiteToken(videoUrl)
+            )
             val thumb = details?.episode?.thumbnail_url
 
             if (!thumb.isNullOrBlank()) {
@@ -616,7 +671,9 @@ class AnimeONProvider : MainAPI() {
             .map { it.episodeId }.distinct()
 
         val apiPosters = sources.mapNotNull { s ->
-            s.apiPoster?.takeIf { it.isNotEmpty() && !it.contains("mooncdn.") }
+            s.apiPoster?.takeIf {
+                it.isNotEmpty() && !it.contains("mooncdn.") && !it.contains("media.fenixplay.xyz")
+            }
         }.distinct()
 
         if (moonIds.isEmpty() && otherIds.isEmpty() && apiPosters.isEmpty()) return null
@@ -661,10 +718,11 @@ class AnimeONProvider : MainAPI() {
         val access = FenixUtils.mediaAccess(html)
         lastFenixMediaAccess = access
         if (access != null) fenixMediaAccessCache[code] = access
+        rememberFenixEmbed(code, html)
 
         FenixUtils.inlinePlaylist(html)?.let { p ->
             if (!p.slug.isNullOrEmpty() || p.playback != null) {
-                fenixPlaylistCache[code] = p
+                fenixPlaylistCache[code] = TimedValue(p)
                 return p
             }
         }
@@ -682,9 +740,11 @@ class AnimeONProvider : MainAPI() {
                 cacheTime = 0
             ).text
 
+            rememberFenixEmbed(code, json)
+
             val playlist = AppUtils.parseJson<FenixPlaylist>(json)
             if (!playlist.slug.isNullOrEmpty()) {
-                fenixPlaylistCache[code] = playlist
+                fenixPlaylistCache[code] = TimedValue(playlist)
             }
             playlist
         } catch (e: Exception) {
@@ -708,10 +768,11 @@ class AnimeONProvider : MainAPI() {
         val access = FenixUtils.mediaAccess(html)
         lastFenixMediaAccess = access
         if (access != null) fenixMediaAccessCache[code] = access
+        rememberFenixEmbed(code, html)
 
         FenixUtils.inlinePlaylist(html)?.let { p ->
             if (!p.slug.isNullOrEmpty() || p.playback != null) {
-                fenixPlaylistCache[code] = p
+                fenixPlaylistCache[code] = TimedValue(p)
                 return p
             }
         }
@@ -725,10 +786,12 @@ class AnimeONProvider : MainAPI() {
             )
         ) ?: return null
 
+        rememberFenixEmbed(code, json)
+
         return try {
             val playlist = AppUtils.parseJson<FenixPlaylist>(json)
             if (!playlist.slug.isNullOrEmpty()) {
-                fenixPlaylistCache[code] = playlist
+                fenixPlaylistCache[code] = TimedValue(playlist)
             }
             playlist
         } catch (e: Exception) {
@@ -738,17 +801,17 @@ class AnimeONProvider : MainAPI() {
 
     private suspend fun getFenixPlaylist(videoUrl: String): FenixPlaylist? {
         val code = FenixUtils.code(videoUrl) ?: return null
-        fenixPlaylistCache[code]?.let { return it }
+        fenixPlaylistCache[code]?.takeIf { it.isFresh(FENIX_PLAYLIST_TTL) }?.let { return it.value }
         val p = fetchFenixPlaylist(videoUrl)
-        if (p != null && !p.slug.isNullOrEmpty()) fenixPlaylistCache[code] = p
+        if (p != null && !p.slug.isNullOrEmpty()) fenixPlaylistCache[code] = TimedValue(p)
         return p
     }
 
     private fun getFenixPlaylistSync(videoUrl: String): FenixPlaylist? {
         val code = FenixUtils.code(videoUrl) ?: return null
-        fenixPlaylistCache[code]?.let { return it }
+        fenixPlaylistCache[code]?.takeIf { it.isFresh(FENIX_PLAYLIST_TTL) }?.let { return it.value }
         val p = fetchFenixPlaylistSync(videoUrl)
-        if (p != null && !p.slug.isNullOrEmpty()) fenixPlaylistCache[code] = p
+        if (p != null && !p.slug.isNullOrEmpty()) fenixPlaylistCache[code] = TimedValue(p)
         return p
     }
 
@@ -756,17 +819,13 @@ class AnimeONProvider : MainAPI() {
         slug: String,
         playbackToken: String,
         edition: String,
-        number: Int
+        number: Int,
+        siteToken: String?
     ): FenixPlaybackEpisodeResponse? {
         return try {
             val response = app.get(
                 FenixUtils.playbackUrl(slug, edition, number),
-                headers = mapOf(
-                    "User-Agent" to userAgent,
-                    "X-Fenix-Playback" to playbackToken,
-                    "Accept" to "application/json, text/plain, */*",
-                    "Referer" to FenixUtils.referer
-                ),
+                headers = fenixPlaybackHeaders(playbackToken, siteToken),
                 cacheTime = 0
             ).text
             AppUtils.parseJson<FenixPlaybackEpisodeResponse>(response)
@@ -779,16 +838,12 @@ class AnimeONProvider : MainAPI() {
         slug: String,
         playbackToken: String,
         edition: String,
-        number: Int
+        number: Int,
+        siteToken: String?
     ): FenixPlaybackEpisodeResponse? {
         val json = httpGetText(
             FenixUtils.playbackUrl(slug, edition, number),
-            mapOf(
-                "User-Agent" to userAgent,
-                "X-Fenix-Playback" to playbackToken,
-                "Accept" to "application/json, text/plain, */*",
-                "Referer" to FenixUtils.referer
-            )
+            fenixPlaybackHeaders(playbackToken, siteToken)
         ) ?: return null
 
         return try {
@@ -1140,7 +1195,7 @@ class AnimeONProvider : MainAPI() {
         val mutex = episodeResolveMutexes.getOrPut(data) { Mutex() }
         mutex.withLock {
             episodeResolutionCache[data]?.let { cached ->
-                if (cached.isUsable()) return@withLock
+                if (cached.isUsable(LINKS_TTL)) return@withLock
             }
 
             val capturedLinks = mutableListOf<ExtractorLink>()
@@ -1162,7 +1217,7 @@ class AnimeONProvider : MainAPI() {
 
         val nextData = seq[nextIdx]
         episodeResolutionCache[nextData]?.let {
-            if (it.isUsable()) return
+            if (it.isUsable(LINKS_TTL)) return
         }
 
         backgroundScope.launch {
@@ -1186,7 +1241,7 @@ class AnimeONProvider : MainAPI() {
         }
 
         episodeResolutionCache[data]?.let { cached ->
-            if (cached.isUsable()) {
+            if (cached.isUsable(LINKS_TTL)) {
                 cached.links.forEach { callback(it) }
                 cached.subtitles.forEach { subtitleCallback(it) }
                 prefetchNext(data)
@@ -1197,7 +1252,7 @@ class AnimeONProvider : MainAPI() {
         val mutex = episodeResolveMutexes.getOrPut(data) { Mutex() }
         return mutex.withLock {
             episodeResolutionCache[data]?.let { cached ->
-                if (cached.isUsable()) {
+                if (cached.isUsable(LINKS_TTL)) {
                     cached.links.forEach { callback(it) }
                     cached.subtitles.forEach { subtitleCallback(it) }
                     prefetchNext(data)
@@ -1319,7 +1374,13 @@ class AnimeONProvider : MainAPI() {
 
             if (slug.isNullOrEmpty() || playbackToken.isNullOrEmpty() || epNum == null) return false
 
-            val details = fetchFenixEpisodePlayback(slug, playbackToken, edition, epNum) ?: return false
+            val details = fetchFenixEpisodePlayback(
+                slug,
+                playbackToken,
+                edition,
+                epNum,
+                fenixSiteToken(videoUrl)
+            ) ?: return false
             val ep = details.episode ?: return false
 
             emitFenixEpisode(ep, fenixMediaToken(videoUrl, details.token), sourceName, callback, subtitleCallback)
@@ -1786,6 +1847,8 @@ class AnimeONProvider : MainAPI() {
     companion object {
         private const val VIDEO_URL_TTL = 600_000L
         private const val IFRAME_HTML_TTL = 300_000L
+        private const val FENIX_PLAYLIST_TTL = 1_800_000L
+        private const val LINKS_TTL = 300_000L
         private const val PREFETCH_EPISODES = 3
     }
 }
