@@ -23,6 +23,10 @@ data class SubToAdd(
     val priority: Int
 )
 
+data class TimedValue<T>(val value: T, val at: Long = System.currentTimeMillis()) {
+    fun isFresh(ttlMs: Long): Boolean = System.currentTimeMillis() - at < ttlMs
+}
+
 data class ResolvedEpisode(
     val links: List<ExtractorLink>,
     val subtitles: List<SubtitleFile>,
