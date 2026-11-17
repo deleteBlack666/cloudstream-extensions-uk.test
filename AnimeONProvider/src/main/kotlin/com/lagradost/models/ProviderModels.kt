@@ -1,0 +1,45 @@
+package com.lagradost.models
+
+import com.lagradost.cloudstream3.SubtitleFile
+import com.lagradost.cloudstream3.utils.ExtractorLink
+
+data class PosterFetchTask(
+    val moonIds: List<Int>,
+    val otherIds: List<Int>,
+    val apiPosters: List<String>,
+    val animeId: Int,
+    val epNum: Int
+)
+
+data class CollectedEpisodes(
+    val translationName: String,
+    val playerName: String,
+    val episodes: List<FundubEpisode>
+)
+
+data class SubToAdd(
+    val lang: String,
+    val url: String,
+    val priority: Int
+)
+
+data class ResolvedEpisode(
+    val links: List<ExtractorLink>,
+    val subtitles: List<SubtitleFile>,
+    val resolvedAt: Long = System.currentTimeMillis()
+) {
+    fun isExpired(): Boolean {
+        val now = System.currentTimeMillis() / 1000
+        return links.any { l ->
+            expiresRegex.find(l.url)
+                ?.groupValues?.get(1)?.toLongOrNull()
+                ?.let { exp -> exp - 30 <= now } ?: false
+        }
+    }
+
+    fun isUsable(): Boolean = links.isNotEmpty() && !isExpired()
+
+    companion object {
+        private val expiresRegex = Regex("""[?&]expires=(\d+)""")
+    }
+}
