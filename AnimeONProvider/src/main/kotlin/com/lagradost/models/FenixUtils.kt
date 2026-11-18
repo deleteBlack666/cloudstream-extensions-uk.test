@@ -15,23 +15,6 @@ object FenixUtils {
     private val apiBaseRegex = Regex("""window\.FENIX_API_BASE\s*=\s*["']([^"']+)["']""")
     private val embedSiteRegex = Regex("""window\.FENIX_EMBED_SITE\s*=\s*["']([^"']+)["']""")
 
-    fun embedSite(html: String): String? {
-        return embedSiteRegex.find(html)?.groupValues?.get(1)
-    }
-
-    fun playbackHeaders(userAgent: String, playbackToken: String, siteToken: String?): Map<String, String> {
-        val headers = mutableMapOf(
-            "User-Agent" to userAgent,
-            "X-Fenix-Playback" to playbackToken,
-            "Accept" to "application/json, text/plain, */*",
-            "Referer" to referer
-        )
-        if (!siteToken.isNullOrEmpty()) {
-            headers["X-Fenix-Site"] = siteToken
-        }
-        return headers
-    }
-    
     fun code(embedUrl: String): String? {
         return embedUrl.substringAfter("/embed/", "").substringBefore("?").ifBlank { null }
     }
@@ -79,6 +62,10 @@ object FenixUtils {
         return apiBaseRegex.find(html)?.groupValues?.get(1)
     }
 
+    fun embedSite(html: String): String? {
+        return embedSiteRegex.find(html)?.groupValues?.get(1)
+    }
+
     fun playlistApiUrl(origin: String, code: String): String {
         return if (isSignedCode(code)) "$origin/api/playlist-code/$code" else "$origin/api/playlist/$code"
     }
@@ -102,5 +89,18 @@ object FenixUtils {
             "Accept" to "*/*",
             "Accept-Language" to "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7"
         )
+    }
+
+    fun playbackHeaders(userAgent: String, playbackToken: String, siteToken: String?): Map<String, String> {
+        val headers = mutableMapOf(
+            "User-Agent" to userAgent,
+            "X-Fenix-Playback" to playbackToken,
+            "Accept" to "application/json, text/plain, */*",
+            "Referer" to referer
+        )
+        if (!siteToken.isNullOrEmpty()) {
+            headers["X-Fenix-Site"] = siteToken
+        }
+        return headers
     }
 }
