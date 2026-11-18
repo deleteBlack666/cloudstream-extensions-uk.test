@@ -1630,9 +1630,10 @@ class AnimeONProvider : MainAPI() {
 
     private suspend fun shouldHideMoonWebm(url: String, headers: Map<String, String>): Boolean {
         if (!url.contains(".webm", true)) return false
-        if (!ProviderUtils.vp9HardwareLacksProfile2()) return false
-        val profile = ProviderUtils.vp9Profile(url, headers)
-        return profile != null && profile >= 2
+
+        val profile = ProviderUtils.vp9Profile(url, headers) ?: return false
+
+        return ProviderUtils.vp9ProfileUnsupportedByHardware(profile)
     }
 
     private suspend fun processMoonRawFile(
