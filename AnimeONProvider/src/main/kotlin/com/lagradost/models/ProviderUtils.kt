@@ -1,8 +1,6 @@
 package com.lagradost.models
 
 import com.lagradost.cloudstream3.utils.ExtractorLink
-import okhttp3.OkHttpClient
-import okhttp3.Request
 
 object ProviderUtils {
 
@@ -145,79 +143,6 @@ object ProviderUtils {
                     }
                 }
             }
-        } catch (e: Exception) {
-            false
-        }
-    }
-
-    private val vp9ProfileCache = java.util.concurrent.ConcurrentHashMap<String, Int>()
-
-    fun vp9Profile(url: String, headers: Map<String, String>): Int? {
-        vp9ProfileCache[url]?.let { return it }
-
-        val bytes = try {
-            val req = Request.Builder()
-                .url(url)
-                .apply { headers.forEach { (k, v) -> header(k, v) } }
-                .header("Range", "bytes=0-65535")
-                .get()
-                .build()
-            OkHttpClient().newCall(req).execute().use { it.body?.bytes() }
-                ?: return null
-        } catch (e: Exception) {
-            return null
-        }
-
-        val profile = parseVp9Profile(bytes)
-        if (profile != null) vp9ProfileCache[url] = profile
-        return profile
-    }
-
-    private fun parseVp9Profile(b: ByteArray): Int? {
-        if (b.size < 3) return null
-        for (i in 0 until b.size - 2) {
-            if (b[i] == 0x25.toByte() && b[i + 1] == 0x86.toByte() && b[i + 2] == 0x81.toByte()) {
-                return b[i + 3].toInt() and 0xFF
-            }
-        }
-        return null
-    }
-
-    private fun vp9ProfileToConstant(profile: Int): Int? = when (profile) {
-        0 -> android.media.MediaCodecInfo.CodecProfileLevel.VP9Profile0
-        1 -> android.media.MediaCodecInfo.CodecProfileLevel.VP9Profile1
-        2 -> android.media.MediaCodecInfo.CodecProfileLevel.VP9Profile2
-        3 -> android.media.MediaCodecInfo.CodecProfileLevel.VP9Profile3
-        else -> null
-    }
-
-    fun vp9ProfileUnsupportedByHardware(profile: Int): Boolean {
-        if (android.os.Build.VERSION.SDK_INT < 21) return false
-
-        val constant = vp9ProfileToConstant(profile) ?: return false
-
-        return try {
-            val list = android.media.MediaCodecList(android.media.MediaCodecList.REGULAR_CODECS)
-
-            fun isSoftware(n: String) = n.startsWith("c2.android.") || n.startsWith("omx.google.")
-
-            fun supports(info: android.media.MediaCodecInfo): Boolean {
-                val caps = info.getCapabilitiesForType("video/x-vnd.on2.vp9") ?: return false
-                return caps.profileLevels?.any { it.profile == constant } == true
-            }
-
-            val decoders = list.codecInfos.filter { info ->
-                !info.isEncoder && try {
-                    info.getCapabilitiesForType("video/x-vnd.on2.vp9") != null
-                } catch (e: Exception) {
-                    false
-                }
-            }
-
-            val hw = decoders.filter { !isSoftware(it.name) }
-            val sw = decoders.filter { isSoftware(it.name) }
-
-            hw.isNotEmpty() && hw.none { supports(it) } && sw.any { supports(it) }
         } catch (e: Exception) {
             false
         }
