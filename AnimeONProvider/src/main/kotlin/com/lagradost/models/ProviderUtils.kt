@@ -183,19 +183,27 @@ object ProviderUtils {
         return null
     }
 
-    fun vp9HardwareLacksProfile2(): Boolean {
+    private fun vp9ProfileToConstant(profile: Int): Int? = when (profile) {
+        0 -> android.media.MediaCodecInfo.CodecProfileLevel.VP9Profile0
+        1 -> android.media.MediaCodecInfo.CodecProfileLevel.VP9Profile1
+        2 -> android.media.MediaCodecInfo.CodecProfileLevel.VP9Profile2
+        3 -> android.media.MediaCodecInfo.CodecProfileLevel.VP9Profile3
+        else -> null
+    }
+
+    fun vp9ProfileUnsupportedByHardware(profile: Int): Boolean {
         if (android.os.Build.VERSION.SDK_INT < 21) return false
+
+        val constant = vp9ProfileToConstant(profile) ?: return false
 
         return try {
             val list = android.media.MediaCodecList(android.media.MediaCodecList.REGULAR_CODECS)
 
             fun isSoftware(n: String) = n.startsWith("c2.android.") || n.startsWith("omx.google.")
 
-            fun hasProfile2(info: android.media.MediaCodecInfo): Boolean {
+            fun supports(info: android.media.MediaCodecInfo): Boolean {
                 val caps = info.getCapabilitiesForType("video/x-vnd.on2.vp9") ?: return false
-                return caps.profileLevels?.any {
-                    it.profile == android.media.MediaCodecInfo.CodecProfileLevel.VP9Profile2
-                } == true
+                return caps.profileLevels?.any { it.profile == constant } == true
             }
 
             val decoders = list.codecInfos.filter { info ->
@@ -209,7 +217,7 @@ object ProviderUtils {
             val hw = decoders.filter { !isSoftware(it.name) }
             val sw = decoders.filter { isSoftware(it.name) }
 
-            hw.isNotEmpty() && hw.none { hasProfile2(it) } && sw.any { hasProfile2(it) }
+            hw.isNotEmpty() && hw.none { supports(it) } && sw.any { supports(it) }
         } catch (e: Exception) {
             false
         }
