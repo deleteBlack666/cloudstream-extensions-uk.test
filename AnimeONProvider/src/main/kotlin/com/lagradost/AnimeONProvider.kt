@@ -1628,14 +1628,6 @@ class AnimeONProvider : MainAPI() {
         }
     }
 
-    private suspend fun shouldHideMoonWebm(url: String, headers: Map<String, String>): Boolean {
-        if (!url.contains(".webm", true)) return false
-
-        val profile = ProviderUtils.vp9Profile(url, headers) ?: return false
-
-        return ProviderUtils.vp9ProfileUnsupportedByHardware(profile)
-    }
-
     private suspend fun processMoonRawFile(
         rawFile: String,
         sourceName: String,
@@ -1655,35 +1647,15 @@ class AnimeONProvider : MainAPI() {
                     qUrl.contains(".m3u8") -> {
                         emitM3u8(qUrl, sourceName, "${MoonUtils.baseFromUrl(qUrl)}/", headers, callback)
                     }
-                    qUrl.contains("moonanime") || qUrl.contains("mooncdn") -> {
+                    qUrl.contains("moonanime") -> {
                         val finalUrl = resolveMoonContent(qUrl)
                         if (!finalUrl.isNullOrEmpty()) {
-                            if (!shouldHideMoonWebm(finalUrl, headers)) {
-                                callback(
-                                    ProviderUtils.fixMovieExtractorLink(
-                                        ExtractorLink(
-                                            source = name,
-                                            name = sourceName,
-                                            url = finalUrl,
-                                            referer = "${MoonUtils.baseFromUrl(qUrl)}/",
-                                            quality = qualityInt,
-                                            type = com.lagradost.cloudstream3.utils.ExtractorLinkType.VIDEO,
-                                            headers = headers
-                                        ),
-                                        sourceName
-                                    )
-                                )
-                            }
-                        }
-                    }
-                    else -> {
-                        if (!shouldHideMoonWebm(qUrl, headers)) {
                             callback(
                                 ProviderUtils.fixMovieExtractorLink(
                                     ExtractorLink(
                                         source = name,
                                         name = sourceName,
-                                        url = qUrl,
+                                        url = finalUrl,
                                         referer = "${MoonUtils.baseFromUrl(qUrl)}/",
                                         quality = qualityInt,
                                         type = com.lagradost.cloudstream3.utils.ExtractorLinkType.VIDEO,
@@ -1693,6 +1665,22 @@ class AnimeONProvider : MainAPI() {
                                 )
                             )
                         }
+                    }
+                    else -> {
+                        callback(
+                            ProviderUtils.fixMovieExtractorLink(
+                                ExtractorLink(
+                                    source = name,
+                                    name = sourceName,
+                                    url = qUrl,
+                                    referer = "${MoonUtils.baseFromUrl(qUrl)}/",
+                                    quality = qualityInt,
+                                    type = com.lagradost.cloudstream3.utils.ExtractorLinkType.VIDEO,
+                                    headers = headers
+                                ),
+                                sourceName
+                            )
+                        )
                     }
                 }
             }
@@ -1707,28 +1695,26 @@ class AnimeONProvider : MainAPI() {
             return
         }
 
-        val finalUrl = if (rawFile.contains("moonanime") || rawFile.contains("mooncdn")) {
+        val finalUrl = if (rawFile.contains("moonanime")) {
             resolveMoonContent(rawFile) ?: return
         } else {
             rawFile
         }
 
-        if (!shouldHideMoonWebm(finalUrl, headers)) {
-            callback(
-                ProviderUtils.fixMovieExtractorLink(
-                    ExtractorLink(
-                        source = name,
-                        name = sourceName,
-                        url = finalUrl,
-                        referer = referer,
-                        quality = com.lagradost.cloudstream3.utils.Qualities.Unknown.value,
-                        type = com.lagradost.cloudstream3.utils.ExtractorLinkType.VIDEO,
-                        headers = headers
-                    ),
-                    sourceName
-                )
+        callback(
+            ProviderUtils.fixMovieExtractorLink(
+                ExtractorLink(
+                    source = name,
+                    name = sourceName,
+                    url = finalUrl,
+                    referer = referer,
+                    quality = com.lagradost.cloudstream3.utils.Qualities.Unknown.value,
+                    type = com.lagradost.cloudstream3.utils.ExtractorLinkType.VIDEO,
+                    headers = headers
+                ),
+                sourceName
             )
-        }
+        )
     }
 
     private suspend fun processAshdiIframe(
