@@ -1,5 +1,6 @@
 package com.lagradost
 
+import android.util.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addMalId
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
@@ -104,13 +105,29 @@ class AnimeONProvider : MainAPI() {
         }
     }
 
+    private fun logD(message: String) {
+        try {
+            Log.d("ANIMEON", message)
+        } catch (e: Exception) {
+        }
+    }
+
+    private fun shortUrl(url: String): String {
+        return url.substringBefore("?").takeLast(90)
+    }
+
+    private fun tokenTail(token: String?): String {
+        if (token.isNullOrEmpty()) return "none"
+        return token.takeLast(12)
+    }
+
     override fun getVideoInterceptor(extractorLink: ExtractorLink): okhttp3.Interceptor {
         return okhttp3.Interceptor { chain ->
             val request = chain.request()
             val url = request.url.toString()
 
             val newRequest = when {
-                url.contains("moonanime") -> {
+                url.contains("moonanime") || url.contains("mooncdn") -> {
                     val base = MoonUtils.baseFromUrl(url)
                     request.newBuilder()
                         .header("Referer", "$base/")
@@ -118,18 +135,28 @@ class AnimeONProvider : MainAPI() {
                         .header("User-Agent", userAgent)
                         .build()
                 }
-                url.contains("fenixplay.xyz") || url.contains("cdn.fenixplay.xyz") -> {
+                url.contains("fenixplay") || url.contains("fanixplay") -> {
                     val builder = request.newBuilder()
                         .header("Referer", FenixUtils.referer)
                         .header("Origin", FenixUtils.defaultOrigin)
                         .header("User-Agent", userAgent)
-                    lastFenixCookie?.let { builder.header("Cookie", it) }
+                    val cookie = lastFenixCookie
+                    if (!cookie.isNullOrEmpty()) {
+                        builder.header("Cookie", cookie)
+                    }
+                    logD("INT req ${shortUrl(url)} cookie=${cookie != null} hasQueryToken=${url.contains("token=")}")
                     builder.build()
                 }
                 else -> request
             }
 
-            chain.proceed(newRequest)
+            val response = chain.proceed(newRequest)
+
+            if (url.contains("fenixplay") || url.contains("fanixplay") || url.contains("moonanime") || url.contains("mooncdn")) {
+                logD("INT res ${response.code} ${shortUrl(url)}")
+            }
+
+            response
         }
     }
 
@@ -242,15 +269,17 @@ class AnimeONProvider : MainAPI() {
                     requestBuilder.header("Sec-Fetch-Site", "none")
                     requestBuilder.header("Cookie", "_ga=GA1.1.1899212404.1785951203; _gid=GA1.2.1071268545.1786650637")
                 }
-                originalUrl.contains("fenixplay.xyz") -> {
+                originalUrl.contains("fenixplay") -> {
                     requestBuilder.header("Referer", FenixUtils.referer)
                     requestBuilder.header("Origin", FenixUtils.defaultOrigin)
 
-                    (extraCookie ?: lastFenixCookie)?.let { requestBuilder.header("Cookie", it) }
+                    val cookie = extraCookie ?: lastFenixCookie
+                    if (!cookie.isNullOrEmpty()) requestBuilder.header("Cookie", cookie)
                 }
             }
 
             val response = posterHttpClient.newCall(requestBuilder.build()).execute()
+            logD("POSTER ${response.code} ${shortUrl(originalUrl)}")
 
             if (!response.isSuccessful) {
                 response.close()
@@ -261,6 +290,7 @@ class AnimeONProvider : MainAPI() {
             response.close()
             bytes
         } catch (e: Exception) {
+            logD("POSTER err ${shortUrl(originalUrl)} ${e.javaClass.simpleName}")
             ByteArray(0)
         }
     }
@@ -342,9 +372,15 @@ class AnimeONProvider : MainAPI() {
             }
 
             val body = if (response.isSuccessful) response.body?.string() ?: "" else ""
+
+            if (url.contains("fenixplay") || url.contains("moonanime")) {
+                logD("GET ${response.code} ${shortUrl(url)} len=${body.length} ck=${headers.containsKey("Cookie")} site=${headers.containsKey("X-Fenix-Site")}")
+            }
+
             response.close()
             body
         } catch (e: Exception) {
+            logD("GET err ${shortUrl(url)} ${e.javaClass.simpleName}")
             null
         }
     }
@@ -563,6 +599,7 @@ class AnimeONProvider : MainAPI() {
         if (header.isBlank()) return
         fenixCookies[code] = TimedValue(header)
         lastFenixCookie = header
+        logD("COOKIE code=${code.takeLast(10)} names=${header.split(";").joinToString(",") { it.trim().substringBefore("=") }} len=${header.length}")
     }
 
     private fun rememberFenixEmbed(code: String, text: String) {
@@ -575,6 +612,8 @@ class AnimeONProvider : MainAPI() {
         fenixPosterRegex.find(text)?.groupValues?.get(1)?.let { poster ->
             if (poster.startsWith("http")) fenixPosterUrls[code] = poster
         }
+
+        logD("EMBED code=${code.takeLast(10)} site=${fenixSiteTokens[code] != null} poster=${fenixPosterUrls[code] != null} media=${fenixMediaAccessCache[code] != null}")
     }
 
     private fun fenixMediaHeaders(cookie: String?): Map<String, String> {
@@ -774,6 +813,8 @@ class AnimeONProvider : MainAPI() {
         } catch (e: Exception) {
         }
 
+        logD("PLAYLIST async code=${code.takeLast(10)} htmlLen=${html.length} cookie=${fenixCookies[code] != null}")
+
         val access = FenixUtils.mediaAccess(html)
         lastFenixMediaAccess = access
         if (access != null) fenixMediaAccessCache[code] = access
@@ -782,6 +823,7 @@ class AnimeONProvider : MainAPI() {
         FenixUtils.inlinePlaylist(html)?.let { p ->
             if (!p.slug.isNullOrEmpty() || p.playback != null) {
                 fenixPlaylistCache[code] = TimedValue(p)
+                logD("PLAYLIST inline slug=${p.slug} playback=${p.playback?.token != null}")
                 return p
             }
         }
@@ -805,8 +847,10 @@ class AnimeONProvider : MainAPI() {
             if (!playlist.slug.isNullOrEmpty()) {
                 fenixPlaylistCache[code] = TimedValue(playlist)
             }
+            logD("PLAYLIST api slug=${playlist.slug} playback=${playlist.playback?.token != null}")
             playlist
         } catch (e: Exception) {
+            logD("PLAYLIST api err ${e.javaClass.simpleName}")
             null
         }
     }
@@ -824,6 +868,8 @@ class AnimeONProvider : MainAPI() {
             ),
             cookieSink = { header -> rememberFenixCookie(code, header) }
         ) ?: ""
+
+        logD("PLAYLIST sync code=${code.takeLast(10)} htmlLen=${html.length} cookie=${fenixCookies[code] != null}")
 
         val access = FenixUtils.mediaAccess(html)
         lastFenixMediaAccess = access
@@ -889,9 +935,12 @@ class AnimeONProvider : MainAPI() {
                 FenixUtils.playbackUrl(slug, edition, number),
                 headers = fenixPlaybackHeaders(playbackToken, siteToken, cookie),
                 cacheTime = 0
-            ).text
-            AppUtils.parseJson<FenixPlaybackEpisodeResponse>(response)
+            )
+            val text = response.text
+            logD("PLAYBACK async ${response.code} $slug/$edition/$number site=${siteToken != null} cookie=${cookie != null} len=${text.length}")
+            AppUtils.parseJson<FenixPlaybackEpisodeResponse>(text)
         } catch (e: Exception) {
+            logD("PLAYBACK async err $slug/$edition/$number ${e.javaClass.simpleName}")
             null
         }
     }
@@ -939,13 +988,17 @@ class AnimeONProvider : MainAPI() {
 
             val location = response.headers["location"] ?: response.headers["Location"]
 
-            if (!location.isNullOrEmpty()) {
+            val result = if (!location.isNullOrEmpty()) {
                 location
             } else {
                 val body = response.text.trim()
                 if (body.startsWith("http")) body else null
             }
+
+            logD("MOON resolve ${shortUrl(contentUrl)} -> ${result?.let { shortUrl(it) }}")
+            result
         } catch (e: Exception) {
+            logD("MOON resolve err ${shortUrl(contentUrl)} ${e.javaClass.simpleName}")
             null
         }
     }
@@ -1300,11 +1353,13 @@ class AnimeONProvider : MainAPI() {
         val animeId = data.trim().toIntOrNull()
 
         if (animeId != null) {
+            logD("LINKS movie animeId=$animeId")
             return loadMovieLinks(animeId, subtitleCallback, callback)
         }
 
         episodeResolutionCache[data]?.let { cached ->
             if (cached.isUsable(LINKS_TTL)) {
+                logD("LINKS cache hit links=${cached.links.size}")
                 cached.links.forEach { callback(it) }
                 cached.subtitles.forEach { subtitleCallback(it) }
                 prefetchNext(data)
@@ -1316,6 +1371,7 @@ class AnimeONProvider : MainAPI() {
         return mutex.withLock {
             episodeResolutionCache[data]?.let { cached ->
                 if (cached.isUsable(LINKS_TTL)) {
+                    logD("LINKS cache hit2 links=${cached.links.size}")
                     cached.links.forEach { callback(it) }
                     cached.subtitles.forEach { subtitleCallback(it) }
                     prefetchNext(data)
@@ -1336,6 +1392,7 @@ class AnimeONProvider : MainAPI() {
             }
 
             val result = resolveEpisodeLinks(data, wrappedCallback, wrappedSubCallback)
+            logD("LINKS resolved=$result links=${capturedLinks.size} subs=${capturedSubs.size}")
 
             if (capturedLinks.isNotEmpty()) {
                 episodeResolutionCache.putIfAbsent(data, ResolvedEpisode(capturedLinks, capturedSubs))
@@ -1361,6 +1418,8 @@ class AnimeONProvider : MainAPI() {
             headers = headers
         )
 
+        logD("M3U8 $sourceName streams=${streams.size} ${shortUrl(streamUrl)}")
+
         ProviderUtils.filterStreams(streams).forEach {
             callback(ProviderUtils.fixMovieExtractorLink(it, sourceName))
         }
@@ -1376,18 +1435,23 @@ class AnimeONProvider : MainAPI() {
     ) {
         val headers = fenixMediaHeaders(cookie)
 
+        logD("FENIX emit tracks=${ep.tracks?.size ?: 0} mediaToken=${tokenTail(mediaToken)} cookie=${cookie != null} cookieTail=${tokenTail(cookie)}")
+
         ep.tracks?.forEach { track ->
             val hlsUrl = track.hls_url
             if (hlsUrl.isNullOrEmpty()) return@forEach
 
             val label = track.label ?: track.language ?: "Fenix"
             val master = pickFenixMaster(hlsUrl, track.cast_avc_url) ?: return@forEach
+            val finalUrl = FenixUtils.addToken(master, mediaToken)
+
+            logD("FENIX track=$label url=${shortUrl(finalUrl)} queryToken=${finalUrl.contains("token=")} hevc=$hevcMain10Supported")
 
             callback(
                 ExtractorLink(
                     source = name,
                     name = "$label · Fenix",
-                    url = FenixUtils.addToken(master, mediaToken),
+                    url = finalUrl,
                     referer = FenixUtils.referer,
                     quality = com.lagradost.cloudstream3.utils.Qualities.Unknown.value,
                     type = com.lagradost.cloudstream3.utils.ExtractorLinkType.M3U8,
@@ -1399,11 +1463,14 @@ class AnimeONProvider : MainAPI() {
         if (ep.tracks.isNullOrEmpty()) {
             val fallbackMaster = pickFenixMaster(ep.hls_master_url, ep.cast_avc_url)
             if (!fallbackMaster.isNullOrEmpty()) {
+                val finalUrl = FenixUtils.addToken(fallbackMaster, mediaToken)
+                logD("FENIX fallback url=${shortUrl(finalUrl)}")
+
                 callback(
                     ExtractorLink(
                         source = name,
                         name = sourceName,
-                        url = FenixUtils.addToken(fallbackMaster, mediaToken),
+                        url = finalUrl,
                         referer = FenixUtils.referer,
                         quality = com.lagradost.cloudstream3.utils.Qualities.Unknown.value,
                         type = com.lagradost.cloudstream3.utils.ExtractorLinkType.M3U8,
@@ -1428,6 +1495,8 @@ class AnimeONProvider : MainAPI() {
         val isAshdi = playerName.contains("Ashdi", ignoreCase = true)
         val isFenix = playerName.contains("Fenix", ignoreCase = true)
 
+        logD("PROC $sourceName url=${shortUrl(videoUrl)}")
+
         if (isFenix && videoUrl.contains("fenixplay.xyz")) {
             val playlist = getFenixPlaylist(videoUrl)
 
@@ -1436,16 +1505,21 @@ class AnimeONProvider : MainAPI() {
             val epNum = FenixUtils.episodeNumber(videoUrl) ?: fallbackEpNum
             val edition = FenixUtils.edition(videoUrl)
 
-            if (slug.isNullOrEmpty() || playbackToken.isNullOrEmpty() || epNum == null) return false
+            if (slug.isNullOrEmpty() || playbackToken.isNullOrEmpty() || epNum == null) {
+                logD("PROC fenix missing slug=$slug token=${playbackToken != null} ep=$epNum")
+                return false
+            }
 
             val cookie = fenixCookie(videoUrl)
+            val site = fenixSiteToken(videoUrl)
+            logD("PROC fenix slug=$slug ep=$epNum edition=$edition site=${site != null} cookie=${cookie != null}")
 
             val details = fetchFenixEpisodePlayback(
                 slug,
                 playbackToken,
                 edition,
                 epNum,
-                fenixSiteToken(videoUrl),
+                site,
                 cookie
             ) ?: return false
             val ep = details.episode ?: return false
@@ -1486,6 +1560,7 @@ class AnimeONProvider : MainAPI() {
             }
 
             val (rawFile, subUrl) = getMoonFile(videoUrl)
+            logD("MOON rawFile=${shortUrl(rawFile)} subs=${subUrl != null}")
             if (rawFile.isNotEmpty()) {
                 invokeSubtitles(subUrl, subtitleCallback)
                 processMoonRawFile(rawFile, sourceName, isMovie, callback)
@@ -1508,6 +1583,8 @@ class AnimeONProvider : MainAPI() {
         }
 
         if (sources.isEmpty()) return false
+
+        logD("RESOLVE sources=${sources.size}")
 
         val seenLinks = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
         val seenSubs = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
@@ -1543,11 +1620,14 @@ class AnimeONProvider : MainAPI() {
                             safeSubCallback
                         )
                     } catch (e: Exception) {
+                        logD("RESOLVE err ${source.playerName} ${e.javaClass.simpleName}")
                         false
                     }
                 }
             }.awaitAll()
         }
+
+        logD("RESOLVE done ok=${results.count { it }}/${results.size}")
 
         return results.any { it }
     }
@@ -1634,8 +1714,12 @@ class AnimeONProvider : MainAPI() {
 
     private suspend fun fetchSubtitleBytes(url: String, headers: Map<String, String>): ByteArray {
         return try {
-            app.get(url, headers = headers, cacheTime = 0).body.bytes()
+            val response = app.get(url, headers = headers, cacheTime = 0)
+            val bytes = response.body.bytes()
+            logD("SUB ${response.code} ${shortUrl(url)} len=${bytes.size}")
+            bytes
         } catch (e: Exception) {
+            logD("SUB err ${shortUrl(url)} ${e.javaClass.simpleName}")
             ByteArray(0)
         }
     }
@@ -1724,6 +1808,7 @@ class AnimeONProvider : MainAPI() {
                     qUrl.contains("moonanime") -> {
                         val finalUrl = resolveMoonContent(qUrl)
                         if (!finalUrl.isNullOrEmpty()) {
+                            logD("MOON emit q=$qualityInt ${shortUrl(finalUrl)}")
                             callback(
                                 ProviderUtils.fixMovieExtractorLink(
                                     ExtractorLink(
@@ -1741,6 +1826,7 @@ class AnimeONProvider : MainAPI() {
                         }
                     }
                     else -> {
+                        logD("MOON direct q=$qualityInt ${shortUrl(qUrl)}")
                         callback(
                             ProviderUtils.fixMovieExtractorLink(
                                 ExtractorLink(
@@ -1774,6 +1860,8 @@ class AnimeONProvider : MainAPI() {
         } else {
             rawFile
         }
+
+        logD("MOON single ${shortUrl(finalUrl)}")
 
         callback(
             ProviderUtils.fixMovieExtractorLink(
