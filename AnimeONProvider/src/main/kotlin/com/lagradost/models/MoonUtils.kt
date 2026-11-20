@@ -204,6 +204,8 @@ object MoonUtils {
     }
 
     fun rawFile(js: String, key: String): String? {
+        val candidates = mutableListOf<String>()
+
         for (match in callRegex.findAll(js)) {
             val decoded = decrypt(match.groupValues[2], key)
             if (decoded.isEmpty()) continue
@@ -214,10 +216,17 @@ object MoonUtils {
             val isStaticAsset = staticAssetRegex.containsMatchIn(decoded)
 
             if ((isVideoOrPlaylist || isMoonDomain) && !isStaticAsset) {
-                return decoded
+                candidates.add(decoded)
             }
         }
-        return null
+
+        if (candidates.isEmpty()) return null
+
+        candidates.firstOrNull { it.contains(".m3u8") }?.let { return it }
+        candidates.firstOrNull { it.contains("avc", true) || it.contains("h264", true) }?.let { return it }
+        candidates.firstOrNull { !it.contains(".webm", true) && !it.contains("vp9", true) }?.let { return it }
+
+        return candidates.first()
     }
 
     fun contentUrl(js: String): String? {
