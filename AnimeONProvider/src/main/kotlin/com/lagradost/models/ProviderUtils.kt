@@ -1,8 +1,11 @@
 package com.lagradost.models
 
 import com.lagradost.cloudstream3.utils.ExtractorLink
+import java.util.concurrent.ConcurrentHashMap
 
 object ProviderUtils {
+
+    private val codecSupportCache = ConcurrentHashMap<String, Boolean>()
 
     fun isImageBytes(bytes: ByteArray?): Boolean {
         if (bytes == null || bytes.size < 12) return false
@@ -28,9 +31,18 @@ object ProviderUtils {
         }
     }
 
+    fun isVp9Webm(url: String): Boolean = url.contains(".webm", true)
+
     fun filterStreams(streams: List<ExtractorLink>): List<ExtractorLink> {
-        val filtered = streams.dropLast(1)
-        return if (filtered.isNotEmpty()) filtered else streams
+        if (streams.size < 2) return streams
+
+        val distinct = streams.distinctBy { "${it.quality}|${it.url.substringBefore("?")}" }
+        if (distinct.size < 2) return distinct
+
+        val maxQuality = distinct.maxOf { it.quality }
+        val last = distinct.last()
+
+        return if (last.quality < maxQuality) distinct.dropLast(1) else distinct
     }
 
     fun fixMovieExtractorLink(link: ExtractorLink, sourceName: String): ExtractorLink {
@@ -123,21 +135,23 @@ object ProviderUtils {
         return "Аніме ${seasonUa} сезону"
     }
 
-    fun checkHevcMain10(): Boolean {
+    fun codecSupported(mime: String, width: Int, height: Int, profile: Int? = null): Boolean {
         if (android.os.Build.VERSION.SDK_INT < 21) return false
-        return try {
+
+        val key = "$mime|$width|$height|$profile"
+        codecSupportCache[key]?.let { return it }
+
+        val result = try {
             val list = android.media.MediaCodecList(android.media.MediaCodecList.REGULAR_CODECS)
             list.codecInfos.any { info ->
                 if (info.isEncoder) {
                     false
                 } else {
                     try {
-                        val caps = info.getCapabilitiesForType("video/hevc") ?: return@any false
+                        val caps = info.getCapabilitiesForType(mime) ?: return@any false
                         val videoCaps = caps.videoCapabilities ?: return@any false
-                        val hasMain10 = caps.profileLevels?.any {
-                            it.profile == android.media.MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10
-                        } == true
-                        hasMain10 && videoCaps.isSizeSupported(1920, 1080)
+                        val profileOk = profile == null || caps.profileLevels?.any { it.profile == profile } == true
+                        profileOk && videoCaps.isSizeSupported(width, height)
                     } catch (e: Exception) {
                         false
                     }
@@ -146,5 +160,34 @@ object ProviderUtils {
         } catch (e: Exception) {
             false
         }
+
+        codecSupportCache[key] = result
+        return result
+    }
+
+    fun hasSoftwareDecoder(mime: String): Boolean {
+        if (android.os.Build.VERSION.SDK_INT < 21) return false
+        return try {
+            val list = android.media.MediaCodecList(android.media.MediaCodecList.REGULAR_CODECS)
+            list.codecInfos.any { info ->
+                if (info.isEncoder) return@any false
+                val name = info.name.lowercase()
+                val isSoftware = name.startsWith("c2.android.") || name.startsWith("omx.google.")
+                isSoftware && try {
+                    info.getCapabilitiesForType(mime) != null
+                } catch (e: Exception) {
+                    false
+                }
+            }
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    fun checkHevcMain10(): Boolean {
+        return codecSupported(
+            "video/hevc", 1920, 1080,
+            android.media.MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10
+        )
     }
 }
