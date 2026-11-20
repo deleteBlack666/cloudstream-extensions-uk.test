@@ -91,7 +91,12 @@ object FenixUtils {
         )
     }
 
-    fun playbackHeaders(userAgent: String, playbackToken: String, siteToken: String?): Map<String, String> {
+    fun playbackHeaders(
+        userAgent: String,
+        playbackToken: String,
+        siteToken: String?,
+        cookie: String? = null
+    ): Map<String, String> {
         val headers = mutableMapOf(
             "User-Agent" to userAgent,
             "X-Fenix-Playback" to playbackToken,
@@ -100,6 +105,9 @@ object FenixUtils {
         )
         if (!siteToken.isNullOrEmpty()) {
             headers["X-Fenix-Site"] = siteToken
+        }
+        if (!cookie.isNullOrEmpty()) {
+            headers["Cookie"] = cookie
         }
         return headers
     }
