@@ -15,6 +15,7 @@ class FenixSession(
     private val posterUrls = ConcurrentHashMap<String, String>()
     private val posters = ConcurrentHashMap<String, ByteArray>()
     private val probes = ConcurrentHashMap<String, TimedValue<Boolean>>()
+    private val streams = ConcurrentHashMap<String, TimedValue<List<FenixStream>>>()
 
     private var lastMediaAccess: FenixMediaAccess? = null
     private var lastCookie: String? = null
@@ -88,6 +89,14 @@ class FenixSession(
         posters[url] = bytes
     }
 
+    fun streams(url: String, ttlMs: Long): List<FenixStream>? {
+        return streams[url.substringBefore("?")]?.takeIf { it.isFresh(ttlMs) }?.value
+    }
+
+    fun putStreams(url: String, value: List<FenixStream>) {
+        streams[url.substringBefore("?")] = TimedValue(value)
+    }
+
     fun mediaHeaders(cookie: String?): Map<String, String> {
         val headers = FenixUtils.headers(userAgent).toMutableMap()
         if (!cookie.isNullOrEmpty()) headers["Cookie"] = cookie
@@ -96,10 +105,6 @@ class FenixSession(
 
     fun playbackHeaders(playbackToken: String, siteToken: String?, cookie: String?): Map<String, String> {
         return FenixUtils.playbackHeaders(userAgent, playbackToken, siteToken, cookie)
-    }
-
-    fun masterCandidates(hlsUrl: String?, avcUrl: String?): List<String> {
-        return listOfNotNull(hlsUrl, avcUrl).filter { it.isNotBlank() }.distinct()
     }
 
     fun probe(url: String, cookie: String?, ttlMs: Long): Boolean {
