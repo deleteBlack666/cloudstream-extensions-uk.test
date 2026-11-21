@@ -1372,7 +1372,7 @@ class AnimeONProvider : MainAPI() {
 
         ep.tracks?.forEach { track ->
             val label = track.label ?: track.language ?: "Fenix"
-            val baseName = "$label · Fenix"
+            val baseName = "$label (Fenix)"
 
             fenixTrackStreams(track.hls_url, track.cast_avc_url, mediaToken, cookie).forEach { stream ->
                 callback(
