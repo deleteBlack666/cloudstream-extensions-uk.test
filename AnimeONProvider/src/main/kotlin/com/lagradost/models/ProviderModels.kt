@@ -30,6 +30,12 @@ data class SubToAdd(
     val priority: Int
 )
 
+data class FenixStream(
+    val url: String,
+    val quality: Int,
+    val codecs: String?
+)
+
 data class ResolvedEpisode(
     val links: List<ExtractorLink>,
     val subtitles: List<SubtitleFile>,
