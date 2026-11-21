@@ -37,10 +37,13 @@ class AnimeONProvider : MainAPI() {
     private val userAgent =
         "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Mobile Safari/537.36"
 
+    private val hevcMain10Supported: Boolean by lazy { ProviderUtils.checkHevcMain10() }
+
     private val posterProxy = ByteProxyServer("poster", "application/octet-stream") {
         ProviderUtils.imageContentType(it)
     }
     private val subtitleProxy = ByteProxyServer("sub", "text/vtt; charset=utf-8")
+    private val hlsProxy = ByteProxyServer("hls", "application/vnd.apple.mpegurl")
 
     private val posterFetchTasks = java.util.concurrent.ConcurrentHashMap<String, PosterFetchTask>()
     private val episodePosterCache = java.util.concurrent.ConcurrentHashMap<String, String>()
@@ -840,6 +843,73 @@ class AnimeONProvider : MainAPI() {
         }
     }
 
+    private suspend fun prepareFenixStreams(url: String, cookie: String?): List<FenixStream> {
+        fenix.streams(url, MASTER_TTL)?.let { return it }
+
+        val text = try {
+            app.get(url, headers = fenix.mediaHeaders(cookie), cacheTime = 0).text
+        } catch (e: Exception) {
+            ""
+        }
+
+        val variants = if (text.isEmpty()) emptyList() else HlsUtils.splitMaster(text, url)
+
+        val result = if (variants.isEmpty()) {
+            listOf(FenixStream(url, 0, null))
+        } else {
+            val supported = variants.filter {
+                ProviderUtils.isVariantSupported(it.codecs, it.width, it.height)
+            }
+            val chosen = supported.ifEmpty { listOfNotNull(variants.minByOrNull { it.height }) }
+
+            if (chosen.size == 1 && variants.size == 1) {
+                listOf(FenixStream(url, chosen.first().height, chosen.first().codecs))
+            } else {
+                hlsProxy.ensureStarted()
+                chosen.sortedByDescending { it.height }.map { variant ->
+                    val key = hlsProxy.newKey(".m3u8")
+                    hlsProxy.put(key, variant.master.toByteArray(Charsets.UTF_8), "application/vnd.apple.mpegurl")
+                    FenixStream(hlsProxy.url(key), variant.height, variant.codecs)
+                }
+            }
+        }
+
+        fenix.putStreams(url, result)
+        return result
+    }
+
+    private suspend fun fenixTrackStreams(
+        hlsUrl: String?,
+        avcUrl: String?,
+        mediaToken: String?,
+        cookie: String?
+    ): List<FenixStream> {
+        val native = hlsUrl?.takeIf { it.isNotBlank() }
+        val avc = avcUrl?.takeIf { it.isNotBlank() }
+
+        val ordered = if (hevcMain10Supported) {
+            listOfNotNull(native, avc)
+        } else {
+            listOfNotNull(avc, native)
+        }
+
+        val candidates = ordered.map { FenixUtils.addToken(it, mediaToken) }.distinct()
+        if (candidates.isEmpty()) return emptyList()
+
+        val alive = if (candidates.size == 1) {
+            candidates.first()
+        } else {
+            candidates.firstOrNull { fenix.probe(it, cookie, PROBE_TTL) } ?: candidates.first()
+        }
+
+        return prepareFenixStreams(alive, cookie)
+    }
+
+    private fun fenixStreamName(baseName: String, codecs: String?): String {
+        val label = ProviderUtils.codecLabel(codecs)
+        return if (label != null) "$baseName · $label" else baseName
+    }
+
     private suspend fun resolveMoonContent(contentUrl: String): String? {
         return try {
             val base = MoonUtils.baseFromUrl(contentUrl)
@@ -1290,12 +1360,6 @@ class AnimeONProvider : MainAPI() {
         }
     }
 
-    private fun pickFenixUrl(candidates: List<String>, cookie: String?): String? {
-        if (candidates.isEmpty()) return null
-        if (candidates.size == 1) return candidates.first()
-        return candidates.firstOrNull { fenix.probe(it, cookie, PROBE_TTL) } ?: candidates.first()
-    }
-
     private suspend fun emitFenixEpisode(
         ep: FenixPlaybackEpisode,
         mediaToken: String?,
@@ -1308,39 +1372,32 @@ class AnimeONProvider : MainAPI() {
 
         ep.tracks?.forEach { track ->
             val label = track.label ?: track.language ?: "Fenix"
-            val candidates = fenix.masterCandidates(track.hls_url, track.cast_avc_url)
-                .map { FenixUtils.addToken(it, mediaToken) }
-                .distinct()
+            val baseName = "$label · Fenix"
 
-            val working = pickFenixUrl(candidates, cookie) ?: return@forEach
-
-            callback(
-                ExtractorLink(
-                    source = name,
-                    name = "$label · Fenix",
-                    url = working,
-                    referer = FenixUtils.referer,
-                    quality = com.lagradost.cloudstream3.utils.Qualities.Unknown.value,
-                    type = com.lagradost.cloudstream3.utils.ExtractorLinkType.M3U8,
-                    headers = headers
-                )
-            )
-        }
-
-        if (ep.tracks.isNullOrEmpty()) {
-            val candidates = fenix.masterCandidates(ep.hls_master_url, ep.cast_avc_url)
-                .map { FenixUtils.addToken(it, mediaToken) }
-                .distinct()
-
-            val working = pickFenixUrl(candidates, cookie)
-            if (!working.isNullOrEmpty()) {
+            fenixTrackStreams(track.hls_url, track.cast_avc_url, mediaToken, cookie).forEach { stream ->
                 callback(
                     ExtractorLink(
                         source = name,
-                        name = sourceName,
-                        url = working,
+                        name = fenixStreamName(baseName, stream.codecs),
+                        url = stream.url,
                         referer = FenixUtils.referer,
-                        quality = com.lagradost.cloudstream3.utils.Qualities.Unknown.value,
+                        quality = if (stream.quality > 0) stream.quality else com.lagradost.cloudstream3.utils.Qualities.Unknown.value,
+                        type = com.lagradost.cloudstream3.utils.ExtractorLinkType.M3U8,
+                        headers = headers
+                    )
+                )
+            }
+        }
+
+        if (ep.tracks.isNullOrEmpty()) {
+            fenixTrackStreams(ep.hls_master_url, ep.cast_avc_url, mediaToken, cookie).forEach { stream ->
+                callback(
+                    ExtractorLink(
+                        source = name,
+                        name = fenixStreamName(sourceName, stream.codecs),
+                        url = stream.url,
+                        referer = FenixUtils.referer,
+                        quality = if (stream.quality > 0) stream.quality else com.lagradost.cloudstream3.utils.Qualities.Unknown.value,
                         type = com.lagradost.cloudstream3.utils.ExtractorLinkType.M3U8,
                         headers = headers
                     )
@@ -1885,6 +1942,7 @@ class AnimeONProvider : MainAPI() {
         private const val FENIX_COOKIE_TTL = 7_200_000L
         private const val FENIX_EPISODE_TTL = 1_800_000L
         private const val PROBE_TTL = 300_000L
+        private const val MASTER_TTL = 300_000L
         private const val LINKS_TTL = 300_000L
         private const val PREFETCH_EPISODES = 3
     }
