@@ -6,6 +6,7 @@ import java.util.concurrent.ConcurrentHashMap
 object ProviderUtils {
 
     private val codecSupportCache = ConcurrentHashMap<String, Boolean>()
+    private val hevcProfileRegex = Regex("""(?:hvc1|hev1)\.(\d+)""")
 
     fun isImageBytes(bytes: ByteArray?): Boolean {
         if (bytes == null || bytes.size < 12) return false
@@ -32,6 +33,16 @@ object ProviderUtils {
     }
 
     fun isVp9Webm(url: String): Boolean = url.contains(".webm", true)
+
+    fun codecLabel(codecs: String?): String? {
+        val c = codecs?.lowercase() ?: return null
+        return when {
+            c.contains("vp09") || c.contains("vp9") -> "VP9"
+            c.contains("av01") -> "AV1"
+            c.contains("hvc1.2") || c.contains("hev1.2") -> "HEVC 10bit"
+            else -> null
+        }
+    }
 
     fun filterStreams(streams: List<ExtractorLink>): List<ExtractorLink> {
         if (streams.size < 2) return streams
@@ -181,6 +192,27 @@ object ProviderUtils {
             }
         } catch (e: Exception) {
             false
+        }
+    }
+
+    fun isVariantSupported(codecs: String?, width: Int, height: Int): Boolean {
+        if (width <= 0 || height <= 0) return true
+        val c = codecs?.lowercase() ?: return true
+
+        return when {
+            c.contains("hvc1") || c.contains("hev1") -> {
+                val idc = hevcProfileRegex.find(c)?.groupValues?.get(1)?.toIntOrNull()
+                val profile = when (idc) {
+                    2 -> android.media.MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10
+                    1 -> android.media.MediaCodecInfo.CodecProfileLevel.HEVCProfileMain
+                    else -> null
+                }
+                codecSupported("video/hevc", width, height, profile)
+            }
+            c.contains("avc1") || c.contains("avc3") -> codecSupported("video/avc", width, height, null)
+            c.contains("vp09") || c.contains("vp9") -> codecSupported("video/x-vnd.on2.vp9", width, height, null)
+            c.contains("av01") -> codecSupported("video/av01", width, height, null)
+            else -> true
         }
     }
 
